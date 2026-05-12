@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sapa-mqtt
+  namespace: sapa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sapa-mqtt
+  template:
+    metadata:
+      labels:
+        app: sapa-mqtt
+    spec:
+      containers:
+      - name: mosquitto
+        image: eclipse-mosquitto
+        ports:
+        - containerPort: 1883
+        - containerPort: 9001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sapa-mqtt
+  namespace: sapa
+spec:
+  selector:
+    app: sapa-mqtt
+  ports:
+  - name: mqtt
+    port: 1883
+    targetPort: 1883
+  - name: websocket
+    port: 9001
+    targetPort: 9001

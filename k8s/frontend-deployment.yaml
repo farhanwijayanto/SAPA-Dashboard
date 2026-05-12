@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sapa-frontend
+  namespace: sapa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sapa-frontend
+  template:
+    metadata:
+      labels:
+        app: sapa-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: your-docker-registry/sapa-frontend:latest
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sapa-frontend
+  namespace: sapa
+spec:
+  selector:
+    app: sapa-frontend
+  ports:
+  - port: 80
+    targetPort: 80

@@ -1,0 +1,1436 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [ 5 0 R 7 0 R 9 0 R 11 0 R 13 0 R 15 0 R 17 0 R 19 0 R 21 0 R 23 0 R ] /Count 10 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>
+endobj
+4 0 obj
+<< /Length 3493 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+40 793 Td
+(# SAPA Deployment & Integrasi \(VPS Ubuntu + Nginx + Kubernetes + MQTT + AI Face Recognition\)) Tj
+T*
+() Tj
+T*
+(Dokumen ini menjelaskan cara instalasi dan integrasi end-to-end SAPA di VPS Ubuntu Server) Tj
+T*
+(dengan Nginx sebagai web server/reverse proxy, MongoDB berjalan di Kubernetes, dan kontrol gate) Tj
+T*
+(via MQTT \(ESP32\). Termasuk juga opsi integrasi AI Face Recognition \(di Edge atau di Server\)) Tj
+T*
+(untuk menghasilkan log presensi dan trigger pembukaan gate.) Tj
+T*
+() Tj
+T*
+(## 1\) Gambaran Arsitektur) Tj
+T*
+() Tj
+T*
+(### Komponen) Tj
+T*
+(- Frontend \(Dashboard/Edge\): React \(Vite\) berjalan di browser.) Tj
+T*
+(- Backend API: FastAPI \(Python\) menerima event presensi, menyimpan log, dan publish perintah ke) Tj
+T*
+(MQTT.) Tj
+T*
+(- Database:) Tj
+T*
+(  - PostgreSQL/SQLite: data user & employee \(SQLAlchemy\).) Tj
+T*
+(  - MongoDB: log presensi & audit \(Mongo\).) Tj
+T*
+(- MQTT Broker: Mosquitto/EMQX untuk komunikasi Backend ? ESP32.) Tj
+T*
+(- ESP32 \(Gate Controller\): subscribe ke topik gate, mengendalikan relay/servo untuk membuka) Tj
+T*
+(gate.) Tj
+T*
+(- Kubernetes: menjalankan MongoDB \(dan bisa juga menjalankan MQTT + Postgres + Backend\).) Tj
+T*
+(- Nginx di VPS: serve frontend \(static\) + reverse proxy ke Backend.) Tj
+T*
+() Tj
+T*
+(### Alur Data \(ringkas\)) Tj
+T*
+(1\) Edge melakukan capture wajah.) Tj
+T*
+(2\) AI Face Recognition menentukan employee_id \(di Edge atau di Backend/Service\).) Tj
+T*
+(3\) Edge kirim event ke Backend \(HTTP\) + opsional kirim frame untuk monitoring.) Tj
+T*
+(4\) Backend:) Tj
+T*
+(   - tulis log presensi ke MongoDB) Tj
+T*
+(   - publish perintah gate ke MQTT \(`sapa/gate`\)) Tj
+T*
+(5\) ESP32 menerima perintah MQTT dan membuka gate.) Tj
+T*
+() Tj
+T*
+(### Topik MQTT yang digunakan \(sesuai backend saat ini\)) Tj
+T*
+(- `sapa/attendance` \(ESP32/Edge ? Backend\): event presensi \(JSON\).) Tj
+T*
+(- `sapa/gate` \(Backend ? ESP32\): perintah gate \(JSON\).) Tj
+T*
+() Tj
+T*
+(## 2\) Prasyarat) Tj
+T*
+() Tj
+T*
+(### VPS) Tj
+T*
+(- Ubuntu Server 22.04/24.04 \(direkomendasikan 22.04 LTS\).) Tj
+T*
+(- Domain: misal `sapa.example.com` mengarah ke IP VPS \(A record\).) Tj
+T*
+(- Akses SSH \(key-based\).) Tj
+T*
+() Tj
+T*
+(### Software) Tj
+T*
+(- Nginx \(di host VPS\)) Tj
+T*
+(- Python 3.11 + venv \(di host VPS untuk backend\) atau container runtime \(jika backend di K8s\).) Tj
+T*
+(- Node.js 18+ \(build frontend\) atau build di CI.) Tj
+T*
+(- Kubernetes di VPS:) Tj
+T*
+(  - opsi 1: k3s \(single node\) di VPS \(paling simple\)) Tj
+T*
+(  - opsi 2: cluster K8s terpisah \(butuh konektivitas jaringan antara VPS ? cluster\)) Tj
+T*
+() Tj
+T*
+(## 3\) Pilihan Deployment yang Direkomendasikan) Tj
+T*
+() Tj
+T*
+(Jika MongoDB harus berada di Kubernetes, opsi paling mudah dan ?valid? adalah:) Tj
+T*
+() Tj
+T*
+(### Opsi A \(Direkomendasikan\): k3s di VPS + MongoDB/MQTT/Postgres di K8s + Nginx di host) Tj
+T*
+(- Kelebihan: konektivitas MongoDB/MQTT internal mudah, tanpa expose port sensitif ke internet.) Tj
+T*
+(- Kekurangan: perlu resource VPS cukup.) Tj
+T*
+() Tj
+T*
+(### Opsi B: Cluster K8s terpisah + VPS Nginx + Backend di VPS) Tj
+T*
+(- Kelebihan: beban DB di cluster.) Tj
+T*
+(- Kekurangan: perlu desain jaringan \(VPN/private link\) agar VPS dapat akses MongoDB dengan) Tj
+T*
+(aman.) Tj
+T*
+() Tj
+T*
+(Dokumen ini fokus ke Opsi A \(paling aman dan praktis\). Di bagian akhir ada catatan untuk Opsi) Tj
+T*
+(B.) Tj
+T*
+() Tj
+T*
+(## 4\) Instalasi Dasar VPS \(Ubuntu\)) Tj
+T*
+() Tj
+T*
+(1\) Update OS dan paket:) Tj
+T*
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 3049 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+40 793 Td
+(   - `sudo apt update && sudo apt -y upgrade`) Tj
+T*
+(2\) Buat user deploy dan SSH key:) Tj
+T*
+(   - `sudo adduser deploy`) Tj
+T*
+(   - `sudo usermod -aG sudo deploy`) Tj
+T*
+(   - Copy public key ke `~deploy/.ssh/authorized_keys`) Tj
+T*
+(3\) Firewall dasar \(UFW\):) Tj
+T*
+(   - `sudo ufw allow OpenSSH`) Tj
+T*
+(   - `sudo ufw allow 80/tcp`) Tj
+T*
+(   - `sudo ufw allow 443/tcp`) Tj
+T*
+(   - `sudo ufw enable`) Tj
+T*
+(4\) Set timezone:) Tj
+T*
+(   - `sudo timedatectl set-timezone Asia/Jakarta`) Tj
+T*
+() Tj
+T*
+(## 5\) Install Nginx + TLS \(Let?s Encrypt\)) Tj
+T*
+() Tj
+T*
+(1\) Install Nginx:) Tj
+T*
+(   - `sudo apt install -y nginx`) Tj
+T*
+(2\) Install Certbot:) Tj
+T*
+(   - `sudo apt install -y certbot python3-certbot-nginx`) Tj
+T*
+(3\) Buat konfigurasi Nginx \(lihat contoh di bagian 9\).) Tj
+T*
+(4\) Aktifkan HTTPS:) Tj
+T*
+(   - `sudo certbot --nginx -d sapa.farhn.dev`) Tj
+T*
+(5\) Reload:) Tj
+T*
+(   - `sudo nginx -t && sudo systemctl reload nginx`) Tj
+T*
+() Tj
+T*
+(## 6\) Kubernetes di VPS: K8s ?penuh? vs k3s) Tj
+T*
+() Tj
+T*
+(Jawaban singkat: di VPS Ubuntu, kamu bisa ?pakai K8s? dengan `kubeadm` \(Kubernetes upstream\),) Tj
+T*
+(tapi untuk single-node VPS, yang paling praktis dan valid adalah **k3s** \(karena k3s itu tetap) Tj
+T*
+(Kubernetes, hanya lebih ringan dan mudah dioperasikan\).) Tj
+T*
+() Tj
+T*
+(### Kapan pakai k3s \(direkomendasikan untuk kasus ini\)) Tj
+T*
+(- Single node VPS.) Tj
+T*
+(- Butuh cepat jalan dan minim kompleksitas.) Tj
+T*
+(- MongoDB/Mosquitto berjalan di cluster yang sama dengan aplikasi.) Tj
+T*
+() Tj
+T*
+(### Kapan pakai Kubernetes upstream \(kubeadm\)) Tj
+T*
+(- Kamu butuh cluster multi-node yang ketat \(HA\), dan tim sudah terbiasa operasional kubeadm.) Tj
+T*
+(- Ada kebutuhan plugin CNI/CSI tertentu yang spesifik.) Tj
+T*
+() Tj
+T*
+(Dokumen ini memakai **k3s** karena paling sesuai dengan target ?deploy di VPS Ubuntu + Nginx?.) Tj
+T*
+() Tj
+T*
+(## 7\) Install Kubernetes \(k3s\) di VPS) Tj
+T*
+() Tj
+T*
+(1\) Install k3s:) Tj
+T*
+(   - `curl -sfL https://get.k3s.io | sh -s - --disable traefik`) Tj
+T*
+(2\) Cek status:) Tj
+T*
+(   - `sudo kubectl get nodes`) Tj
+T*
+(3\) \(Opsional\) konfigurasi kubectl untuk user deploy:) Tj
+T*
+(   - `sudo cat /etc/rancher/k3s/k3s.yaml | sed \\"s/127.0.0.1/127.0.0.1/\\" >) Tj
+T*
+(/home/deploy/.kube/config`) Tj
+T*
+(   - `sudo chown -R deploy:deploy /home/deploy/.kube`) Tj
+T*
+() Tj
+T*
+(## 8\) Deploy MongoDB \(dan Mosquitto/Postgres\) di Kubernetes) Tj
+T*
+() Tj
+T*
+(Repo ini sudah punya manifest di folder `k8s/`. Untuk production, tambahkan PVC. Minimal valid) Tj
+T*
+(untuk jalan:) Tj
+T*
+() Tj
+T*
+(1\) Apply namespace:) Tj
+T*
+(   - `kubectl apply -f k8s/namespace.yaml`) Tj
+T*
+(2\) Deploy MongoDB:) Tj
+T*
+(   - `kubectl apply -f k8s/mongo-deployment.yaml`) Tj
+T*
+(3\) Deploy MQTT \(Mosquitto\) di K8s:) Tj
+T*
+(   - `kubectl apply -f k8s/mqtt-deployment.yaml`) Tj
+T*
+(4\) \(Opsional\) Deploy Postgres di K8s:) Tj
+T*
+(   - `kubectl apply -f k8s/db-deployment.yaml`) Tj
+T*
+(5\) Cek service:) Tj
+T*
+(   - `kubectl -n sapa get svc`) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 6 0 R >>
+endobj
+8 0 obj
+<< /Length 2739 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+40 793 Td
+(Catatan production:) Tj
+T*
+(- MongoDB dan Postgres sebaiknya pakai PVC + backup.) Tj
+T*
+(- MQTT sebaiknya pakai auth \(username/password\) dan TLS.) Tj
+T*
+() Tj
+T*
+(## 9\) Deploy Backend di VPS \(systemd\) dan konek ke service di k3s) Tj
+T*
+() Tj
+T*
+(### 8.1 Install dependency backend) Tj
+T*
+(1\) Install Python + build tools:) Tj
+T*
+(   - `sudo apt install -y python3.11 python3.11-venv python3-pip build-essential`) Tj
+T*
+(2\) Clone repo:) Tj
+T*
+(   - `cd /opt && sudo git clone <REPO_URL> sapa`) Tj
+T*
+(   - `sudo chown -R deploy:deploy /opt/sapa`) Tj
+T*
+(3\) Setup venv:) Tj
+T*
+(   - `cd /opt/sapa/backend`) Tj
+T*
+(   - `python3.11 -m venv venv`) Tj
+T*
+(   - `./venv/bin/pip install -r requirements.txt`) Tj
+T*
+() Tj
+T*
+(### 8.2 Konfigurasi environment backend) Tj
+T*
+(Buat file env: `/opt/sapa/backend/.env` \(contoh\):) Tj
+T*
+(- `DATABASE_URL=postgresql://user:password@<POSTGRES_HOST>:5432/sapa_db`) Tj
+T*
+(- `MONGODB_URI=mongodb://sapa-mongo.sapa.svc.cluster.local:27017`) Tj
+T*
+(- `MONGODB_DB=sapa`) Tj
+T*
+(- `MONGODB_COLLECTION_ATTENDANCE=attendance_logs`) Tj
+T*
+(- `MONGODB_COLLECTION_AUDIT=audit_logs`) Tj
+T*
+(- `MQTT_BROKER=sapa-mqtt.sapa.svc.cluster.local`) Tj
+T*
+(- `MQTT_PORT=1883`) Tj
+T*
+(- `SECRET_KEY=<isi-random-panjang>`) Tj
+T*
+(- `EDGE_INGEST_KEY=<isi-random-panjang>` \(opsional, jika ingin mengunci upload frame\)) Tj
+T*
+() Tj
+T*
+(Jika Postgres tidak dipakai, bisa pakai SQLite:) Tj
+T*
+(- `DATABASE_URL=sqlite:////opt/sapa/backend/attendance.db`) Tj
+T*
+() Tj
+T*
+(### 8.3 systemd service) Tj
+T*
+(Buat file `/etc/systemd/system/sapa-backend.service`:) Tj
+T*
+(- WorkingDirectory: `/opt/sapa`) Tj
+T*
+(- ExecStart: `./backend/venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port) Tj
+T*
+(8080`) Tj
+T*
+(- Load env dari `/opt/sapa/backend/.env`) Tj
+T*
+() Tj
+T*
+(Contoh isi `/etc/systemd/system/sapa-backend.service`:) Tj
+T*
+(```ini) Tj
+T*
+([Unit]) Tj
+T*
+(Description=SAPA Backend \(FastAPI\)) Tj
+T*
+(After=network.target) Tj
+T*
+() Tj
+T*
+([Service]) Tj
+T*
+(Type=simple) Tj
+T*
+(User=deploy) Tj
+T*
+(Group=deploy) Tj
+T*
+(WorkingDirectory=/opt/sapa) Tj
+T*
+(EnvironmentFile=/opt/sapa/backend/.env) Tj
+T*
+(ExecStart=/opt/sapa/backend/venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port) Tj
+T*
+(8080 --log-level info) Tj
+T*
+(Restart=always) Tj
+T*
+(RestartSec=2) Tj
+T*
+() Tj
+T*
+([Install]) Tj
+T*
+(WantedBy=multi-user.target) Tj
+T*
+(```) Tj
+T*
+() Tj
+T*
+(Lalu jalankan:) Tj
+T*
+(- `sudo systemctl daemon-reload`) Tj
+T*
+(- `sudo systemctl enable --now sapa-backend`) Tj
+T*
+(- `sudo journalctl -u sapa-backend -f`) Tj
+T*
+() Tj
+T*
+(## 10\) Deploy Frontend \(build static\) + Nginx reverse proxy) Tj
+T*
+() Tj
+T*
+(### 9.1 Build frontend) Tj
+T*
+(1\) Install Node.js 18:) Tj
+T*
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 8 0 R >>
+endobj
+10 0 obj
+<< /Length 2713 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+40 793 Td
+(   - `curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -`) Tj
+T*
+(   - `sudo apt install -y nodejs`) Tj
+T*
+(2\) Build:) Tj
+T*
+(   - `cd /opt/sapa/frontend`) Tj
+T*
+(   - `npm ci`) Tj
+T*
+(   - `npm run build`) Tj
+T*
+(3\) Copy `dist/` ke Nginx root:) Tj
+T*
+(   - `sudo mkdir -p /var/www/sapa`) Tj
+T*
+(   - `sudo rsync -a --delete /opt/sapa/frontend/dist/ /var/www/sapa/`) Tj
+T*
+() Tj
+T*
+(### 10.2 Nginx site config) Tj
+T*
+(Buat `/etc/nginx/sites-available/sapa`:) Tj
+T*
+(- server_name: `sapa.farhn.dev`) Tj
+T*
+(- root: `/var/www/sapa`) Tj
+T*
+(- SPA fallback: `try_files $uri /index.html`) Tj
+T*
+(- reverse proxy API:) Tj
+T*
+(  - location `/api/` ? `http://127.0.0.1:8080/`) Tj
+T*
+(  - pastikan rewrite menghapus prefix `/api`) Tj
+T*
+() Tj
+T*
+(Contoh konfigurasi `/etc/nginx/sites-available/sapa`:) Tj
+T*
+(```nginx) Tj
+T*
+(server {) Tj
+T*
+(  listen 80;) Tj
+T*
+(  server_name sapa.farhn.dev;) Tj
+T*
+() Tj
+T*
+(  root /var/www/sapa;) Tj
+T*
+(  index index.html;) Tj
+T*
+() Tj
+T*
+(  location / {) Tj
+T*
+(    try_files $uri /index.html;) Tj
+T*
+(  }) Tj
+T*
+() Tj
+T*
+(  location /api/ {) Tj
+T*
+(    proxy_http_version 1.1;) Tj
+T*
+(    proxy_set_header Host $host;) Tj
+T*
+(    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;) Tj
+T*
+(    proxy_set_header X-Forwarded-Proto $scheme;) Tj
+T*
+() Tj
+T*
+(    rewrite ^/api/\(.*\)$ /$1 break;) Tj
+T*
+(    proxy_pass http://127.0.0.1:8080;) Tj
+T*
+(  }) Tj
+T*
+(}) Tj
+T*
+(```) Tj
+T*
+() Tj
+T*
+(Aktifkan:) Tj
+T*
+(- `sudo ln -s /etc/nginx/sites-available/sapa /etc/nginx/sites-enabled/sapa`) Tj
+T*
+(- `sudo nginx -t && sudo systemctl reload nginx`) Tj
+T*
+() Tj
+T*
+(## 11\) Integrasi AI Face Recognition) Tj
+T*
+() Tj
+T*
+(Ada 2 pendekatan yang ?valid?. Pilih satu:) Tj
+T*
+() Tj
+T*
+(### Pendekatan 1 \(Direkomendasikan\): AI di Edge) Tj
+T*
+(- Edge device menjalankan proses AI \(Python/ONNX\) untuk:) Tj
+T*
+(  - face detection + face embedding) Tj
+T*
+(  - nearest neighbor match ke database embedding lokal \(sinkron dari server\)) Tj
+T*
+(- Output: `employee_id`, `is_valid`, dan metadata confidence.) Tj
+T*
+(- Edge mengirim hasil ke Backend:) Tj
+T*
+(  - `POST /edge/events` dengan payload `{ is_valid, employee_id, message }`) Tj
+T*
+(  - `POST /edge/frame` opsional \(untuk monitor live di dashboard\)) Tj
+T*
+() Tj
+T*
+(Keuntungan:) Tj
+T*
+(- Latensi rendah, lebih tahan jika internet lambat.) Tj
+T*
+(- Privasi lebih baik \(tidak selalu kirim foto full ke server\).) Tj
+T*
+() Tj
+T*
+(### Pendekatan 2: AI di Server \(Backend/Service\)) Tj
+T*
+(- Edge hanya kirim foto \(face crop\) atau embedding ke backend.) Tj
+T*
+(- Backend memanggil service AI \(microservice\) untuk match.) Tj
+T*
+(- Backend menyimpan hasil dan publish MQTT.) Tj
+T*
+ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 10 0 R >>
+endobj
+12 0 obj
+<< /Length 3152 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+40 793 Td
+() Tj
+T*
+(Keuntungan:) Tj
+T*
+(- Edge lebih ringan.) Tj
+T*
+(- Model & data embedding terpusat.) Tj
+T*
+() Tj
+T*
+(Catatan implementasi:) Tj
+T*
+(- Simpan foto wajah employee saat registrasi \(sudah ada upload face\).) Tj
+T*
+(- Tambahkan pipeline ekstraksi embedding saat upload face, simpan embedding \(di) Tj
+T*
+(Postgres/Mongo\).) Tj
+T*
+(- Saat presensi: ambil embedding baru dan lakukan matching.) Tj
+T*
+() Tj
+T*
+(## 12\) Integrasi MQTT untuk Gate \(ESP32\)) Tj
+T*
+() Tj
+T*
+(### 11.1 Broker MQTT) Tj
+T*
+(Jika broker di k3s:) Tj
+T*
+(- Service `sapa-mqtt` dapat diakses dari dalam cluster melalui DNS.) Tj
+T*
+(- Untuk ESP32 \(di jaringan luar\), gunakan salah satu:) Tj
+T*
+(  - expose MQTT via NodePort + firewall hanya untuk jaringan lokal) Tj
+T*
+(  - gunakan reverse proxy TCP \(Nginx stream\) + TLS) Tj
+T*
+(  - gunakan VPN \(WireGuard\) agar ESP32 masuk jaringan private \(paling aman\)) Tj
+T*
+() Tj
+T*
+(### 11.1.1 ESP32 satu jaringan \(LAN\) vs beda jaringan \(Internet\)) Tj
+T*
+() Tj
+T*
+(#### Mode A \(sekarang\): ESP32 satu jaringan yang sama dengan VPS) Tj
+T*
+(Target: ESP32 connect ke broker Mosquitto yang berjalan di k3s, tanpa membuka broker ke) Tj
+T*
+(internet.) Tj
+T*
+() Tj
+T*
+(Opsi yang paling sederhana:) Tj
+T*
+(- Expose Mosquitto via NodePort, lalu batasi akses via firewall agar hanya LAN yang boleh) Tj
+T*
+(masuk.) Tj
+T*
+() Tj
+T*
+(Langkah konsep:) Tj
+T*
+(1\) Ubah service Mosquitto menjadi NodePort untuk port 1883 \(dan 8883 jika pakai TLS\).) Tj
+T*
+(2\) Buka firewall hanya dari subnet LAN \(mis. `192.168.0.0/24`\) ke port NodePort.) Tj
+T*
+(3\) Konfigurasi ESP32:) Tj
+T*
+(   - MQTT host: IP VPS \(LAN\)) Tj
+T*
+(   - MQTT port: NodePort yang dipilih) Tj
+T*
+(   - username/password \(wajib untuk production\)) Tj
+T*
+() Tj
+T*
+(Catatan: NodePort biasanya berada di range 30000-32767.) Tj
+T*
+() Tj
+T*
+(#### Mode B \(nanti\): ESP32 beda jaringan) Tj
+T*
+(Target: tetap aman tanpa expose MQTT plaintext ke publik.) Tj
+T*
+() Tj
+T*
+(Pilihan yang direkomendasikan \(urut aman ? praktis\):) Tj
+T*
+(1\) WireGuard VPN) Tj
+T*
+(   - VPS sebagai WireGuard server) Tj
+T*
+(   - ESP32 biasanya tidak bisa WireGuard langsung, jadi pakai gateway \(Raspberry Pi/mini) Tj
+T*
+(router\) yang join VPN.) Tj
+T*
+(   - ESP32 connect MQTT ke gateway \(LAN lokal\), gateway meneruskan ke broker lewat VPN.) Tj
+T*
+(2\) MQTT over TLS \(port 8883\) + firewall allowlist) Tj
+T*
+(   - Expose broker TLS saja) Tj
+T*
+(   - Tambahkan username/password + ACL) Tj
+T*
+(   - Allowlist IP publik jika memungkinkan \(fixed IP\). Jika IP dinamis, ini sulit.) Tj
+T*
+(3\) Reverse proxy TCP \(Nginx stream\) + TLS termination) Tj
+T*
+(   - Nginx di host sebagai TCP proxy untuk MQTT TLS) Tj
+T*
+(   - Tetap perlu auth+ACL di broker) Tj
+T*
+() Tj
+T*
+(### 11.2 Format pesan \(direkomendasikan\)) Tj
+T*
+(Topik `sapa/gate` \(Backend ? ESP32\):) Tj
+T*
+(```json) Tj
+T*
+({ "action": "open", "employee_id": "123456", "ts": "2026-05-06T13:00:00Z" }) Tj
+T*
+(```) Tj
+T*
+(atau:) Tj
+T*
+(```json) Tj
+T*
+({ "action": "invalid", "reason": "unknown_face", "ts": "2026-05-06T13:00:00Z" }) Tj
+T*
+(```) Tj
+T*
+() Tj
+T*
+(Topik `sapa/attendance` \(ESP32/Edge ? Backend\):) Tj
+T*
+ET
+endstream
+endobj
+13 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 12 0 R >>
+endobj
+14 0 obj
+<< /Length 3020 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+40 793 Td
+(```json) Tj
+T*
+({ "employee_id": "123456", "is_valid": true, "direction": "in" }) Tj
+T*
+(```) Tj
+T*
+() Tj
+T*
+(ESP32 subscribe ke `sapa/gate`, lalu:) Tj
+T*
+(- jika `action=open` ? aktifkan relay/servo selama N detik) Tj
+T*
+(- jika `action=invalid` ? bunyikan buzzer/LED merah) Tj
+T*
+() Tj
+T*
+(## 13\) Keamanan Minimal yang Wajib) Tj
+T*
+() Tj
+T*
+(- Jalankan web via HTTPS \(wajib untuk akses camera dari browser Edge\).) Tj
+T*
+(- Jangan expose MongoDB ke internet.) Tj
+T*
+(- Set `EDGE_INGEST_KEY` dan kirim header `X-EDGE-KEY` dari Edge/Dashboard publisher.) Tj
+T*
+(- Pakai auth MQTT \(username/password\) minimal, idealnya MQTT over TLS.) Tj
+T*
+(- Simpan `SECRET_KEY` unik, panjang, dan rahasiakan.) Tj
+T*
+() Tj
+T*
+(## 13.1 Mosquitto \(Auth + ACL\) ? template konfigurasi) Tj
+T*
+() Tj
+T*
+(Untuk production, Mosquitto sebaiknya:) Tj
+T*
+(- `allow_anonymous false`) Tj
+T*
+(- pakai password file) Tj
+T*
+(- pakai ACL untuk membatasi publish/subscribe) Tj
+T*
+() Tj
+T*
+(Contoh ACL konsep:) Tj
+T*
+(- user `backend`:) Tj
+T*
+(  - publish: `sapa/gate`) Tj
+T*
+(  - subscribe: `sapa/attendance`) Tj
+T*
+(- user `esp32`:) Tj
+T*
+(  - subscribe: `sapa/gate`) Tj
+T*
+(  - publish: `sapa/attendance`) Tj
+T*
+() Tj
+T*
+(Di repo ini sudah ditambahkan manifest siap pakai:) Tj
+T*
+(- `k8s/mosquitto-production.yaml` \(ConfigMap + PVC + Deployment + Service ClusterIP\)) Tj
+T*
+(- `k8s/mosquitto-nodeport.yaml` \(Service NodePort untuk akses LAN\)) Tj
+T*
+() Tj
+T*
+(Langkah apply \(contoh\):) Tj
+T*
+(1\) Buat secret password file Mosquitto \(format file `passwords` hasil `mosquitto_passwd`\):) Tj
+T*
+(   - Buat file lokal `passwords` berisi hash user `backend` dan `esp32`.) Tj
+T*
+(   - `kubectl -n sapa create secret generic sapa-mosquitto-auth) Tj
+T*
+(--from-file=passwords=./passwords`) Tj
+T*
+(2\) Apply Mosquitto:) Tj
+T*
+(   - `kubectl apply -f k8s/mosquitto-production.yaml`) Tj
+T*
+(3\) Jika butuh akses dari ESP32 via LAN:) Tj
+T*
+(   - `kubectl apply -f k8s/mosquitto-nodeport.yaml`) Tj
+T*
+(   - Buka UFW hanya dari subnet LAN ke port 31883.) Tj
+T*
+() Tj
+T*
+(Contoh UFW allowlist LAN \(ganti subnet sesuai jaringan\):) Tj
+T*
+(- `sudo ufw allow from 192.168.0.0/24 to any port 31883 proto tcp`) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(## 14\) Checklist Validasi \(end-to-end\)) Tj
+T*
+() Tj
+T*
+(1\) Dashboard bisa diakses: `https://sapa.example.com`) Tj
+T*
+(2\) API health:) Tj
+T*
+(   - `curl -i https://sapa.example.com/api/edge/status`) Tj
+T*
+(3\) Edge publisher:) Tj
+T*
+(   - buka `/edge` atau aktifkan camera di dashboard) Tj
+T*
+(   - pastikan `POST /api/edge/frame` sukses \(200\)) Tj
+T*
+(4\) MongoDB:) Tj
+T*
+(   - pastikan log presensi masuk ke collection `attendance_logs`) Tj
+T*
+(5\) MQTT:) Tj
+T*
+(   - backend dapat connect ke broker) Tj
+T*
+(   - ESP32 menerima pesan `sapa/gate` dan membuka gate) Tj
+T*
+() Tj
+T*
+(## 15\) Catatan untuk Opsi B \(Cluster K8s terpisah\)) Tj
+T*
+() Tj
+T*
+(Jika MongoDB ada di cluster terpisah:) Tj
+T*
+(- Jangan gunakan NodePort publik untuk 27017.) Tj
+T*
+(- Gunakan koneksi private:) Tj
+T*
+ET
+endstream
+endobj
+15 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 14 0 R >>
+endobj
+16 0 obj
+<< /Length 3048 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+40 793 Td
+(  - VPN \(WireGuard\) antara VPS ? cluster network) Tj
+T*
+(  - atau jalankan backend di cluster yang sama agar akses MongoDB tetap internal) Tj
+T*
+() Tj
+T*
+(---) Tj
+T*
+() Tj
+T*
+(# Lampiran Production Hardening \(Direkomendasikan untuk Deploy VPS\)) Tj
+T*
+() Tj
+T*
+(Bagian ini melengkapi langkah ?jalan dulu? menjadi setup production yang lebih aman dan stabil:) Tj
+T*
+(storage persisten, secrets, TLS, proteksi API, keamanan MQTT, backup, observability, dan) Tj
+T*
+(rencana operasional.) Tj
+T*
+() Tj
+T*
+(## A\) Hardening VPS \(Host Ubuntu\)) Tj
+T*
+() Tj
+T*
+(### A.1 Paket wajib) Tj
+T*
+(- `sudo apt update && sudo apt -y upgrade`) Tj
+T*
+(- `sudo apt install -y nginx ufw fail2ban ca-certificates curl git`) Tj
+T*
+() Tj
+T*
+(### A.2 Firewall \(UFW\)) Tj
+T*
+(- Buka hanya port yang dibutuhkan:) Tj
+T*
+(  - `sudo ufw allow OpenSSH`) Tj
+T*
+(  - `sudo ufw allow 80/tcp`) Tj
+T*
+(  - `sudo ufw allow 443/tcp`) Tj
+T*
+(- Jika kamu expose NodePort/SSH custom, sesuaikan.) Tj
+T*
+(- `sudo ufw enable`) Tj
+T*
+() Tj
+T*
+(### A.3 Fail2ban \(minimal\)) Tj
+T*
+(- Aktifkan jail untuk sshd \(default biasanya sudah ada\).) Tj
+T*
+(- Pastikan SSH pakai key-based dan disable password login untuk production.) Tj
+T*
+() Tj
+T*
+(### A.4 Nginx security headers + rate limit) Tj
+T*
+(Tambahkan header keamanan di server block:) Tj
+T*
+(- `X-Content-Type-Options: nosniff`) Tj
+T*
+(- `X-Frame-Options: SAMEORIGIN`) Tj
+T*
+(- `Referrer-Policy: no-referrer-when-downgrade`) Tj
+T*
+(- `Content-Security-Policy` sesuai kebutuhan \(hati-hati jika terlalu ketat\).) Tj
+T*
+() Tj
+T*
+(Tambahkan rate limit untuk endpoint sensitif \(login\):) Tj
+T*
+(- limit `/api/login` untuk menahan brute force.) Tj
+T*
+() Tj
+T*
+(## B\) Hardening Kubernetes \(k3s\) di VPS) Tj
+T*
+() Tj
+T*
+(### B.1 Install k3s dengan konfigurasi yang ?production-friendly?) Tj
+T*
+(Contoh \(disesuaikan\):) Tj
+T*
+(- disable Traefik \(karena kamu pakai Nginx di host atau ingress-nginx\):) Tj
+T*
+(  - `curl -sfL https://get.k3s.io | sh -s - --disable traefik`) Tj
+T*
+() Tj
+T*
+(### B.2 Storage persisten \(PVC\)) Tj
+T*
+(Untuk single-node VPS, opsi paling sederhana:) Tj
+T*
+(- `local-path-provisioner` bawaan k3s bisa dipakai untuk PVC.) Tj
+T*
+() Tj
+T*
+(Untuk production lebih serius:) Tj
+T*
+(- gunakan Longhorn \(lebih robust\) atau storage managed.) Tj
+T*
+() Tj
+T*
+(## C\) MongoDB Production \(StatefulSet + PVC + Auth\)) Tj
+T*
+() Tj
+T*
+(Manifest `k8s/mongo-deployment.yaml` saat ini belum memakai PVC dan auth. Untuk production:) Tj
+T*
+() Tj
+T*
+(### C.1 Gunakan Secret untuk kredensial) Tj
+T*
+(Buat secret:) Tj
+T*
+(- `kubectl -n sapa create secret generic mongo-auth) Tj
+T*
+(--from-literal=MONGO_INITDB_ROOT_USERNAME=sapa) Tj
+T*
+(--from-literal=MONGO_INITDB_ROOT_PASSWORD='<password-kuat>'`) Tj
+T*
+() Tj
+T*
+(### C.2 StatefulSet + PVC \(contoh minimal\)) Tj
+T*
+(Gunakan StatefulSet agar nama pod stabil dan disk persisten. Contoh konsep \(sesuaikan) Tj
+T*
+(storageClass\):) Tj
+T*
+(- Service: `sapa-mongo` \(ClusterIP\)) Tj
+T*
+(- StatefulSet: volumeClaimTemplates untuk `/data/db`) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+17 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 16 0 R >>
+endobj
+18 0 obj
+<< /Length 2866 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+40 793 Td
+(### C.3 Connection string backend) Tj
+T*
+(Gunakan auth:) Tj
+T*
+(-) Tj
+T*
+(`MONGODB_URI=mongodb://sapa:<password>@sapa-mongo.sapa.svc.cluster.local:27017/?authSource=admi) Tj
+T*
+(n`) Tj
+T*
+() Tj
+T*
+(## D\) MQTT Production \(Auth + ACL + TLS\)) Tj
+T*
+() Tj
+T*
+(MQTT tanpa auth/TLS tidak aman untuk production.) Tj
+T*
+() Tj
+T*
+(### D.1 Pilih broker) Tj
+T*
+(- Mosquitto: simple, ringan.) Tj
+T*
+(- EMQX: fitur enterprise-grade \(ACL, dashboard, TLS lebih mudah\).) Tj
+T*
+() Tj
+T*
+(### D.2 Mosquitto \(contoh hardening\)) Tj
+T*
+(Gunakan ConfigMap + Secret:) Tj
+T*
+(- Password file: `mosquitto_passwd`) Tj
+T*
+(- ACL file untuk membatasi topik:) Tj
+T*
+(  - ESP32 hanya subscribe `sapa/gate` dan publish `sapa/attendance` \(jika diperlukan\).) Tj
+T*
+(  - Backend publish `sapa/gate` dan subscribe `sapa/attendance` \(jika backend juga subscribe\).) Tj
+T*
+() Tj
+T*
+(### D.3 TLS untuk MQTT) Tj
+T*
+(Opsi:) Tj
+T*
+(- MQTT TLS di port 8883 \(langsung di broker\).) Tj
+T*
+(- Jika ESP32 tidak support TLS dengan baik, gunakan WireGuard supaya traffic tetap private.) Tj
+T*
+() Tj
+T*
+(## E\) Edge: HTTPS + Device Identity) Tj
+T*
+() Tj
+T*
+(### E.1 HTTPS wajib untuk camera web) Tj
+T*
+(Browser hanya izinkan `getUserMedia\(\)` di:) Tj
+T*
+(- `https://domain` atau) Tj
+T*
+(- `http://localhost`) Tj
+T*
+() Tj
+T*
+(Jika Edge device membuka dashboard lewat IP \(http\) di jaringan lokal, kamera bisa gagal.) Tj
+T*
+(Solusi:) Tj
+T*
+(- gunakan domain + HTTPS, atau) Tj
+T*
+(- jalankan Edge sebagai aplikasi lokal \(native / python\) atau PWA dengan HTTPS lokal.) Tj
+T*
+() Tj
+T*
+(### E.2 Identitas Edge & autentikasi ingest) Tj
+T*
+(Untuk endpoint ingest frame:) Tj
+T*
+(- set `EDGE_INGEST_KEY` di backend) Tj
+T*
+(- kirim header `X-EDGE-KEY` dari Edge/Dashboard publisher) Tj
+T*
+() Tj
+T*
+(Untuk lebih aman:) Tj
+T*
+(- gunakan token per device \(mis. `EDGE_DEVICE_ID` + secret\)) Tj
+T*
+(- simpan device registry di DB dan lakukan rotate token.) Tj
+T*
+() Tj
+T*
+(## F\) Backend Production \(systemd hardening + health + log\)) Tj
+T*
+() Tj
+T*
+(### F.1 systemd hardening \(opsional\)) Tj
+T*
+(Tambahkan:) Tj
+T*
+(- `NoNewPrivileges=true`) Tj
+T*
+(- `PrivateTmp=true`) Tj
+T*
+(- `ProtectSystem=strict`) Tj
+T*
+(- `ProtectHome=true`) Tj
+T*
+(- `ReadWritePaths=/opt/sapa/backend/uploads /opt/sapa/backend/attendance.db`) Tj
+T*
+() Tj
+T*
+(### F.2 Reverse proxy \(Nginx\) yang benar) Tj
+T*
+(Pastikan Nginx meneruskan header dan tidak cache untuk frame:) Tj
+T*
+(- Endpoint `/api/edge/frame.jpg` sudah set `Cache-Control: no-store`.) Tj
+T*
+() Tj
+T*
+(### F.3 Environment via file) Tj
+T*
+(Jangan hardcode secret di unit file atau repo. Simpan di `/opt/sapa/backend/.env` dengan) Tj
+T*
+(permission ketat:) Tj
+T*
+(- `sudo chown deploy:deploy /opt/sapa/backend/.env`) Tj
+T*
+(- `sudo chmod 600 /opt/sapa/backend/.env`) Tj
+T*
+() Tj
+T*
+(## G\) Database SQL \(Postgres\) Production) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+19 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 18 0 R >>
+endobj
+20 0 obj
+<< /Length 2576 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+40 793 Td
+(Jika kamu pakai Postgres:) Tj
+T*
+(- jalankan Postgres juga di K8s atau managed DB.) Tj
+T*
+(- gunakan PVC + backup.) Tj
+T*
+(- simpan `DATABASE_URL` dengan password kuat.) Tj
+T*
+() Tj
+T*
+(## H\) Ingress/TLS untuk Kubernetes \(opsional\)) Tj
+T*
+() Tj
+T*
+(Karena kamu pakai Nginx di host untuk web, kamu tidak harus expose Ingress K8s untuk publik.) Tj
+T*
+(Tetap bisa:) Tj
+T*
+(- hanya expose service internal cluster) Tj
+T*
+(- backend di VPS akses via DNS `*.svc.cluster.local`) Tj
+T*
+() Tj
+T*
+(Jika kamu ingin semua via ingress-nginx:) Tj
+T*
+(- pasang `ingress-nginx` di k3s) Tj
+T*
+(- pasang `cert-manager` untuk TLS otomatis) Tj
+T*
+(- map host `sapa.example.com` ke ingress) Tj
+T*
+() Tj
+T*
+(## I\) WireGuard \(Direkomendasikan untuk ESP32/MQTT\)) Tj
+T*
+() Tj
+T*
+(Jika ESP32 berada di jaringan berbeda, cara paling aman:) Tj
+T*
+(- setup WireGuard server di VPS) Tj
+T*
+(- ESP32 \(atau gateway lokal\) join VPN) Tj
+T*
+(- MQTT broker tidak perlu public exposure) Tj
+T*
+() Tj
+T*
+(Jika ESP32 tidak bisa WireGuard:) Tj
+T*
+(- gunakan gateway \(Raspberry Pi\) yang join WireGuard dan jadi ?bridge? untuk ESP32.) Tj
+T*
+() Tj
+T*
+(## J\) Backup & Restore) Tj
+T*
+() Tj
+T*
+(### J.1 MongoDB backup) Tj
+T*
+(Gunakan `mongodump` terjadwal \(CronJob di K8s\) dan simpan ke:) Tj
+T*
+(- object storage \(S3 compatible\) atau) Tj
+T*
+(- volume terpisah \(bukan disk yang sama\).) Tj
+T*
+() Tj
+T*
+(### J.2 Postgres backup) Tj
+T*
+(Gunakan `pg_dump` terjadwal.) Tj
+T*
+() Tj
+T*
+(### J.3 Disaster checklist) Tj
+T*
+(- cadangkan file `.env`) Tj
+T*
+(- catat versi image/tag yang digunakan) Tj
+T*
+(- simpan manifest K8s yang dipakai) Tj
+T*
+() Tj
+T*
+(## K\) Observability) Tj
+T*
+() Tj
+T*
+(Minimal yang disarankan:) Tj
+T*
+(- Nginx access/error log) Tj
+T*
+(- `journalctl -u sapa-backend`) Tj
+T*
+(- dashboard metrics \(sudah ada endpoint system metrics\)) Tj
+T*
+() Tj
+T*
+(Jika butuh lebih:) Tj
+T*
+(- Prometheus + Grafana) Tj
+T*
+(- Loki untuk log) Tj
+T*
+() Tj
+T*
+(## L\) CI/CD \(opsional tapi direkomendasikan\)) Tj
+T*
+() Tj
+T*
+(### L.1 Build container image) Tj
+T*
+(- backend image: `your-registry/sapa-backend:<tag>`) Tj
+T*
+(- frontend image atau static build artifact \(copy to `/var/www/sapa`\)) Tj
+T*
+() Tj
+T*
+(### L.2 Deploy) Tj
+T*
+(- GitHub Actions / GitLab CI:) Tj
+T*
+(  - build + push image) Tj
+T*
+(  - apply manifest k8s) Tj
+T*
+(  - reload systemd/nginx jika host-based) Tj
+T*
+() Tj
+T*
+(## M\) AI Face Recognition Production Checklist) Tj
+T*
+() Tj
+T*
+(### M.1 Data wajah \(enrollment\) yang aman) Tj
+T*
+(- simpan foto wajah employee di server untuk audit \(opsional\)) Tj
+T*
+ET
+endstream
+endobj
+21 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 20 0 R >>
+endobj
+22 0 obj
+<< /Length 509 >>
+stream
+BT
+/F1 9 Tf
+11 TL
+40 793 Td
+(- simpan embedding \(vector\) untuk matching) Tj
+T*
+(- hindari menyimpan raw frame presensi tanpa kebutuhan) Tj
+T*
+() Tj
+T*
+(### M.2 Matching strategy) Tj
+T*
+(- threshold cosine distance) Tj
+T*
+(- multi-sample per employee) Tj
+T*
+(- liveness detection \(opsional\) untuk anti spoofing) Tj
+T*
+() Tj
+T*
+(### M.3 Latency & reliability) Tj
+T*
+(- jika AI di Edge: pastikan model ter-cache dan bisa jalan offline) Tj
+T*
+(- jika AI di server: pastikan queue/retry dan timeouts) Tj
+T*
+ET
+endstream
+endobj
+23 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 22 0 R >>
+endobj
+xref
+0 24
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000185 00000 n 
+0000000253 00000 n 
+0000003797 00000 n 
+0000003923 00000 n 
+0000007023 00000 n 
+0000007149 00000 n 
+0000009939 00000 n 
+0000010065 00000 n 
+0000012830 00000 n 
+0000012958 00000 n 
+0000016162 00000 n 
+0000016290 00000 n 
+0000019362 00000 n 
+0000019490 00000 n 
+0000022590 00000 n 
+0000022718 00000 n 
+0000025636 00000 n 
+0000025764 00000 n 
+0000028392 00000 n 
+0000028520 00000 n 
+0000029080 00000 n 
+trailer
+<< /Size 24 /Root 1 0 R >>
+startxref
+29208
+%%EOF

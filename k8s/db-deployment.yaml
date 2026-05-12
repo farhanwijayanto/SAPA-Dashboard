@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sapa-db
+  namespace: sapa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sapa-db
+  template:
+    metadata:
+      labels:
+        app: sapa-db
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15
+        env:
+        - name: POSTGRES_USER
+          value: user
+        - name: POSTGRES_PASSWORD
+          value: password
+        - name: POSTGRES_DB
+          value: sapa_db
+        ports:
+        - containerPort: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sapa-db
+  namespace: sapa
+spec:
+  selector:
+    app: sapa-db
+  ports:
+  - port: 5432
+    targetPort: 5432

@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: sapa_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  mongo:
+    image: mongo:6
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  mqtt:
+    image: eclipse-mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql://user:password@db/sapa_db
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DB: sapa
+      MONGODB_COLLECTION_ATTENDANCE: attendance_logs
+      MONGODB_COLLECTION_AUDIT: audit_logs
+      MQTT_BROKER: mqtt
+      SECRET_KEY: supersecretkey
+    ports:
+      - "8080:8000"
+    depends_on:
+      - db
+      - mongo
+      - mqtt
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  mongo_data:

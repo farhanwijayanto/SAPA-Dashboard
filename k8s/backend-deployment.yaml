@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sapa-backend
+  namespace: sapa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sapa-backend
+  template:
+    metadata:
+      labels:
+        app: sapa-backend
+    spec:
+      containers:
+      - name: backend
+        image: your-docker-registry/sapa-backend:latest
+        env:
+        - name: DATABASE_URL
+          value: postgresql://user:password@sapa-db:5432/sapa_db
+        - name: MONGODB_URI
+          value: mongodb://sapa-mongo:27017
+        - name: MONGODB_DB
+          value: sapa
+        - name: MONGODB_COLLECTION_ATTENDANCE
+          value: attendance_logs
+        - name: MONGODB_COLLECTION_AUDIT
+          value: audit_logs
+        - name: MQTT_BROKER
+          value: sapa-mqtt
+        - name: SECRET_KEY
+          value: your-secret-key
+        ports:
+        - containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sapa-backend
+  namespace: sapa
+spec:
+  selector:
+    app: sapa-backend
+  ports:
+  - port: 8000
+    targetPort: 8000

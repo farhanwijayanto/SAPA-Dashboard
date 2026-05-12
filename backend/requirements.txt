@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+python-jose[cryptography]
+python-multipart
+paho-mqtt
+psycopg2-binary
+alembic
+python-dotenv
+pymongo
