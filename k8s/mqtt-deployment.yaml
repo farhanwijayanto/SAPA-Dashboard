@@ -1,8 +1,24 @@
+# Mosquitto MQTT broker (development variant — anonymous, in-cluster only).
+# Untuk production gunakan k8s/mosquitto-production.yaml + k8s/mosquitto-nodeport.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sapa-mqtt-config
+  namespace: sapa
+data:
+  mosquitto.conf: |
+    listener 1883 0.0.0.0
+    allow_anonymous true
+    persistence false
+    log_dest stdout
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sapa-mqtt
   namespace: sapa
+  labels:
+    app: sapa-mqtt
 spec:
   replicas: 1
   selector:
@@ -14,11 +30,19 @@ spec:
         app: sapa-mqtt
     spec:
       containers:
-      - name: mosquitto
-        image: eclipse-mosquitto
-        ports:
-        - containerPort: 1883
-        - containerPort: 9001
+        - name: mosquitto
+          image: eclipse-mosquitto:2
+          ports:
+            - containerPort: 1883
+            - containerPort: 9001
+          volumeMounts:
+            - name: config
+              mountPath: /mosquitto/config/mosquitto.conf
+              subPath: mosquitto.conf
+      volumes:
+        - name: config
+          configMap:
+            name: sapa-mqtt-config
 ---
 apiVersion: v1
 kind: Service
@@ -29,9 +53,9 @@ spec:
   selector:
     app: sapa-mqtt
   ports:
-  - name: mqtt
-    port: 1883
-    targetPort: 1883
-  - name: websocket
-    port: 9001
-    targetPort: 9001
+    - name: mqtt
+      port: 1883
+      targetPort: 1883
+    - name: websocket
+      port: 9001
+      targetPort: 9001

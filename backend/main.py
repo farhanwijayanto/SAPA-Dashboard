@@ -32,6 +32,43 @@ _edge_last_frame = {
     "content_type": None,
     "bytes": None,
 }
+_gate_lock = Lock()
+_gate_status = {
+    "status": "closed",
+    "last_action": "none",
+    "timestamp": datetime.now(timezone.utc).isoformat(),
+}
+
+# IoT (ESP32) presence tracking via MQTT heartbeat / LWT
+_iot_lock = Lock()
+_iot_state = {
+    "last_seen": None,  # datetime | None
+    "online_payload": None,  # last status payload from device
+}
+_IOT_OFFLINE_AFTER_SECONDS = int(os.getenv("IOT_OFFLINE_AFTER_SECONDS", "15"))
+
+
+def _mark_iot_seen(payload: dict | None = None):
+    with _iot_lock:
+        _iot_state["last_seen"] = datetime.now(timezone.utc)
+        if payload is not None:
+            _iot_state["online_payload"] = payload
+
+
+def _get_iot_state():
+    with _iot_lock:
+        ts = _iot_state["last_seen"]
+        last_payload = _iot_state["online_payload"]
+    if ts is None:
+        return {"connected": False, "last_seen": None, "age_ms": None, "payload": None}
+    age = (datetime.now(timezone.utc) - ts).total_seconds()
+    online = age < _IOT_OFFLINE_AFTER_SECONDS
+    return {
+        "connected": bool(online),
+        "last_seen": ts,
+        "age_ms": int(age * 1000),
+        "payload": last_payload,
+    }
 
 
 def _ensure_user_profile_columns():
@@ -103,25 +140,70 @@ app.add_middleware(
 # MQTT Configuration
 MQTT_BROKER = os.getenv("MQTT_BROKER", "broker.hivemq.com")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
-MQTT_TOPIC_GATE = "sapa/gate"
-MQTT_TOPIC_ATTENDANCE = "sapa/attendance"
+MQTT_USERNAME = os.getenv("MQTT_USERNAME") or None
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD") or None
+MQTT_TOPIC_GATE = os.getenv("MQTT_TOPIC_GATE", "sapa/gate")
+MQTT_TOPIC_ATTENDANCE = os.getenv("MQTT_TOPIC_ATTENDANCE", "sapa/attendance")
+MQTT_TOPIC_DEVICE_STATUS = os.getenv("MQTT_TOPIC_DEVICE_STATUS", "sapa/device/status")
+MQTT_TOPIC_DEVICE_HEARTBEAT = os.getenv("MQTT_TOPIC_DEVICE_HEARTBEAT", "sapa/device/heartbeat")
+MQTT_TOPIC_PIR = os.getenv("MQTT_TOPIC_PIR", "sapa/pir")
 
 mqtt_client = mqtt.Client()
+if MQTT_USERNAME:
+    mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD or "")
 
 def on_connect(client, _userdata, _flags, rc):
     print(f"Connected to MQTT Broker with result code {rc}")
     client.subscribe(MQTT_TOPIC_ATTENDANCE)
+    client.subscribe(MQTT_TOPIC_DEVICE_STATUS)
+    client.subscribe(MQTT_TOPIC_DEVICE_HEARTBEAT)
+    client.subscribe(MQTT_TOPIC_PIR)
+
+def _publish_gate_command(action: str, employee_id: str | None = None, reason: str | None = None):
+    payload = {
+        "action": action,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    if employee_id:
+        payload["employee_id"] = employee_id
+    if reason:
+        payload["reason"] = reason
+    try:
+        mqtt_client.publish(MQTT_TOPIC_GATE, json.dumps(payload))
+    except Exception as e:
+        print(f"MQTT publish failed: {e}")
 
 def on_message(_client, _userdata, msg):
+    topic = msg.topic
+    raw = msg.payload.decode(errors="ignore")
     try:
-        payload = json.loads(msg.payload.decode())
+        payload = json.loads(raw)
     except Exception:
-        mqtt_client.publish(MQTT_TOPIC_GATE, json.dumps({"action": "invalid"}))
+        payload = {"raw": raw}
+
+    if topic == MQTT_TOPIC_DEVICE_STATUS or topic == MQTT_TOPIC_DEVICE_HEARTBEAT:
+        _mark_iot_seen(payload if isinstance(payload, dict) else {"raw": raw})
         return
 
-    employee_id = payload.get("employee_id")
-    is_valid = payload.get("is_valid")
-    direction = payload.get("direction", "in")
+    if topic == MQTT_TOPIC_PIR:
+        # PIR sensor reports motion after pass-through; close the gate.
+        _mark_iot_seen(payload if isinstance(payload, dict) else None)
+        with _gate_lock:
+            _gate_status["status"] = "closed"
+            _gate_status["last_action"] = "auto_close_pir"
+            _gate_status["timestamp"] = datetime.now(timezone.utc).isoformat()
+        _publish_gate_command("close", reason="pir_motion")
+        return
+
+    if topic != MQTT_TOPIC_ATTENDANCE:
+        return
+
+    # treat any inbound from device as heartbeat
+    _mark_iot_seen(payload if isinstance(payload, dict) else None)
+
+    employee_id = payload.get("employee_id") if isinstance(payload, dict) else None
+    is_valid = payload.get("is_valid") if isinstance(payload, dict) else None
+    direction = (payload.get("direction") if isinstance(payload, dict) else None) or "in"
     timestamp = datetime.now(timezone.utc)
 
     db = SessionLocal()
@@ -139,14 +221,29 @@ def on_message(_client, _userdata, msg):
                         "direction": direction,
                         "status": "present",
                         "reason": None,
+                        "source": "edge_mqtt",
                     }
                 )
             except Exception:
-                mqtt_client.publish(MQTT_TOPIC_GATE, json.dumps({"action": "invalid"}))
+                _publish_gate_command("invalid", reason="db_unavailable")
                 return
-            mqtt_client.publish(MQTT_TOPIC_GATE, json.dumps({"action": "open", "employee_id": employee.id}))
+            with _gate_lock:
+                _gate_status["status"] = "open"
+                _gate_status["last_action"] = "auto_open_face_match"
+                _gate_status["timestamp"] = datetime.now(timezone.utc).isoformat()
+            with _edge_lock:
+                _edge_last_event["ts"] = timestamp
+                _edge_last_event["is_valid"] = True
+                _edge_last_event["employee_id"] = employee.id
+                _edge_last_event["message"] = f"Welcome {employee.name}"
+            _publish_gate_command("open", employee_id=employee.id)
         else:
-            mqtt_client.publish(MQTT_TOPIC_GATE, json.dumps({"action": "invalid"}))
+            with _edge_lock:
+                _edge_last_event["ts"] = timestamp
+                _edge_last_event["is_valid"] = False
+                _edge_last_event["employee_id"] = employee_id
+                _edge_last_event["message"] = "Wajah tidak dikenali"
+            _publish_gate_command("invalid", reason="unknown_face")
     finally:
         db.close()
 
@@ -165,17 +262,48 @@ def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
     if payload.user_id is not None:
         query = query.filter(models.User.id == payload.user_id)
     user = query.first()
+    ts = datetime.now(timezone.utc)
     if (
         not user
         or not user.password_ciphertext
         or not user.password_iv
         or not auth.verify_password(payload.password, user.password_ciphertext, user.password_iv)
     ):
+        # Record failed login attempt to MongoDB audit_logs (Username, Status, Timestamp)
+        try:
+            mongo_db.get_audit_collection().insert_one(
+                {
+                    "timestamp": ts,
+                    "username": payload.username,
+                    "user_id": payload.user_id,
+                    "role": user.role if user else None,
+                    "event_type": "login_failed",
+                    "status": "failed",
+                    "message": "Incorrect credentials",
+                }
+            )
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect credentials",
         )
     access_token = auth.create_access_token(data={"sub": user.username, "role": user.role, "uid": user.id})
+    # Record successful login (Username, Status, Timestamp)
+    try:
+        mongo_db.get_audit_collection().insert_one(
+            {
+                "timestamp": ts,
+                "username": user.username,
+                "user_id": user.id,
+                "role": user.role,
+                "event_type": "login_success",
+                "status": "success",
+                "message": "Login success",
+            }
+        )
+    except Exception:
+        pass
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -225,6 +353,27 @@ def upload_employee_face(
         f.write(face_image.file.read())
     return {"detail": "Face saved", "employee_id": employee_id}
 
+
+@app.get("/employees/{employee_id}/faces")
+def get_employee_faces(employee_id: str, db: Session = Depends(get_db)):
+    db_employee = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
+    if not db_employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    
+    faces_dir = os.path.join(os.path.dirname(__file__), "uploads", "faces")
+    faces = []
+    
+    # Check for face files with common extensions
+    for ext in [".jpg", ".jpeg", ".png", ".webp"]:
+        face_path = os.path.join(faces_dir, f"{employee_id}{ext}")
+        if os.path.exists(face_path):
+            faces.append({
+                "url": f"/uploads/faces/{employee_id}{ext}",
+                "filename": f"{employee_id}{ext}",
+            })
+    
+    return {"employee_id": employee_id, "faces": faces}
+
 @app.delete("/employees/{employee_id}")
 def delete_employee(employee_id: str, db: Session = Depends(get_db), _current_user: models.User = Depends(auth.get_current_manager)):
     db_employee = db.query(models.Employee).filter(models.Employee.id == employee_id).first()
@@ -237,6 +386,127 @@ def delete_employee(employee_id: str, db: Session = Depends(get_db), _current_us
 @app.get("/employees/", response_model=List[schemas.Employee])
 def list_employees(db: Session = Depends(get_db), _current_user: models.User = Depends(auth.get_current_user)):
     return db.query(models.Employee).all()
+
+
+@app.post("/roles/", response_model=schemas.Role)
+def create_role(
+    payload: schemas.RoleCreate,
+    db: Session = Depends(get_db),
+    _current_user: models.User = Depends(auth.get_current_manager),
+):
+    division = payload.division.strip()
+    position = payload.position.strip()
+    if not division or not position:
+        raise HTTPException(status_code=400, detail="Division and Position are required")
+    exists = (
+        db.query(models.Role)
+        .filter(models.Role.division == division, models.Role.position == position)
+        .first()
+    )
+    if exists:
+        raise HTTPException(status_code=409, detail="Role already exists")
+    role = models.Role(
+        division=division,
+        position=position,
+        description=(payload.description.strip() if payload.description else None),
+    )
+    db.add(role)
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+@app.delete("/roles/{role_id}")
+def delete_role(
+    role_id: int,
+    db: Session = Depends(get_db),
+    _current_user: models.User = Depends(auth.get_current_manager),
+):
+    role = db.query(models.Role).filter(models.Role.id == role_id).first()
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    db.delete(role)
+    db.commit()
+    return {"detail": "Role deleted"}
+
+
+@app.get("/roles/", response_model=List[schemas.Role])
+def list_roles(
+    db: Session = Depends(get_db),
+    _current_user: models.User = Depends(auth.get_current_user),
+):
+    return db.query(models.Role).order_by(models.Role.division.asc(), models.Role.position.asc()).all()
+
+
+@app.get("/roles/divisions")
+def list_divisions(
+    db: Session = Depends(get_db),
+    _current_user: models.User = Depends(auth.get_current_user),
+):
+    rows = db.query(models.Role.division).distinct().all()
+    divisions = sorted({(r[0] or "").strip() for r in rows if (r[0] or "").strip()})
+    return {"divisions": divisions}
+
+
+@app.get("/roles/positions")
+def list_positions(
+    division: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    _current_user: models.User = Depends(auth.get_current_user),
+):
+    q = db.query(models.Role)
+    if division:
+        q = q.filter(models.Role.division == division)
+    items = q.order_by(models.Role.position.asc()).all()
+    return {"positions": [{"id": r.id, "division": r.division, "position": r.position} for r in items]}
+
+
+@app.get("/roles/stats", response_model=List[schemas.RoleStats])
+def role_stats(
+    db: Session = Depends(get_db),
+    _current_user: models.User = Depends(auth.get_current_manager),
+):
+    """For each role: total employees, how many are 'active today' (present at least once today), and inactive."""
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start + timedelta(days=1)
+
+    active_ids: set[str] = set()
+    try:
+        cursor = mongo_db.get_logs_collection().find(
+            {
+                "timestamp": {"$gte": today_start, "$lt": today_end},
+                "status": "present",
+            },
+            {"employee_id": 1},
+        )
+        for doc in cursor:
+            eid = doc.get("employee_id")
+            if eid:
+                active_ids.add(str(eid))
+    except Exception:
+        # MongoDB unavailable -> just report totals without active counts.
+        active_ids = set()
+
+    out: list[dict] = []
+    roles = db.query(models.Role).order_by(models.Role.division.asc(), models.Role.position.asc()).all()
+    for r in roles:
+        members = (
+            db.query(models.Employee)
+            .filter(models.Employee.division == r.division, models.Employee.position == r.position)
+            .all()
+        )
+        total = len(members)
+        active = sum(1 for emp in members if emp.id in active_ids)
+        out.append({
+            "id": r.id,
+            "division": r.division,
+            "position": r.position,
+            "description": r.description,
+            "total": total,
+            "active_today": active,
+            "inactive_today": max(0, total - active),
+        })
+    return out
 
 @app.get("/users/me", response_model=schemas.User)
 def get_me(current_user: models.User = Depends(auth.get_current_user)):
@@ -557,7 +827,7 @@ def _edge_status_payload(now: datetime):
         last = dict(_edge_last_event)
     ts = last.get("ts") or now
     age_ms = int(max(0, (now - ts).total_seconds() * 1000))
-    stale = age_ms > 5000
+    stale = age_ms > 3000
     return {
         "ts": ts,
         "is_valid": None if stale else last.get("is_valid"),
@@ -589,10 +859,28 @@ def push_edge_event(payload: schemas.EdgeEvent):
 async def push_edge_frame(
     frame: UploadFile = File(...),
     x_edge_key: Optional[str] = Header(default=None, alias="X-EDGE-KEY"),
+    authorization: Optional[str] = Header(default=None, alias="Authorization"),
+    db: Session = Depends(get_db),
 ):
+    # Accept either a valid EDGE_INGEST_KEY (used by the headless edge server)
+    # OR a valid logged-in JWT (used when /edge is opened in a browser by an
+    # authenticated user). If neither is provided and EDGE_INGEST_KEY is set,
+    # the request is rejected.
     required = os.getenv("EDGE_INGEST_KEY", "")
-    if required and (x_edge_key or "") != required:
-        raise HTTPException(status_code=401, detail="Invalid edge key")
+    has_valid_key = bool(required) and (x_edge_key or "") == required
+    has_valid_token = False
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        try:
+            await auth.get_current_user(token=token, db=db)
+            has_valid_token = True
+        except HTTPException:
+            has_valid_token = False
+        except Exception:
+            has_valid_token = False
+
+    if required and not (has_valid_key or has_valid_token):
+        raise HTTPException(status_code=401, detail="Invalid edge key or token")
     raw = await frame.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Empty frame")
@@ -626,3 +914,166 @@ def get_edge_frame(_t: Optional[int] = Query(default=None, alias="t")):
         media_type=ct,
         headers={"Cache-Control": "no-store, max-age=0"},
     )
+
+
+@app.get("/gate/status")
+def get_gate_status():
+    with _gate_lock:
+        gs = _gate_status.copy()
+    iot = _get_iot_state()
+    return {
+        "status": gs.get("status", "closed"),
+        "last_action": gs.get("last_action", "none"),
+        "timestamp": gs.get("timestamp", datetime.now(timezone.utc).isoformat()),
+        "iot_connected": iot["connected"],
+        "iot_last_seen": iot["last_seen"],
+        "iot_age_ms": iot["age_ms"],
+    }
+
+
+@app.get("/iot/status")
+def get_iot_status():
+    iot = _get_iot_state()
+    return {
+        "connected": iot["connected"],
+        "last_seen": iot["last_seen"],
+        "age_ms": iot["age_ms"],
+        "payload": iot["payload"],
+        "offline_after_seconds": _IOT_OFFLINE_AFTER_SECONDS,
+    }
+
+
+@app.post("/gate/control")
+def control_gate(request: dict, current_user: models.User = Depends(auth.get_current_user)):
+    action = request.get("action")
+    gate_id = request.get("gate_id", "default")
+
+    if action not in ["open", "close"]:
+        raise HTTPException(status_code=400, detail="Invalid action. Must be 'open' or 'close'")
+
+    iot = _get_iot_state()
+    if not iot["connected"]:
+        raise HTTPException(
+            status_code=503,
+            detail="Gate device offline (no MQTT heartbeat). Tidak bisa kirim perintah.",
+        )
+
+    with _gate_lock:
+        _gate_status["status"] = "open" if action == "open" else "closed"
+        _gate_status["last_action"] = f"manual_{action}_by_{current_user.username}"
+        _gate_status["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+    try:
+        mqtt_client.publish(
+            MQTT_TOPIC_GATE,
+            json.dumps({
+                "action": action,
+                "gate_id": gate_id,
+                "source": "manual",
+                "by": current_user.username,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }),
+        )
+    except Exception:
+        pass
+
+    try:
+        mongo_db.get_audit_collection().insert_one(
+            {
+                "timestamp": datetime.now(timezone.utc),
+                "username": current_user.username,
+                "user_id": current_user.id,
+                "role": current_user.role,
+                "event_type": f"gate_{action}",
+                "status": "success",
+                "message": f"Manual gate {action} via dashboard",
+            }
+        )
+    except Exception:
+        pass
+
+    return {"ok": True, "action": action, "iot_connected": True}
+
+
+@app.post("/edge/face-match")
+def report_face_match(payload: schemas.FaceMatchEvent):
+    """Receive face recognition result from edge server (AI runs on edge)."""
+    if payload.edge_key:
+        required = os.getenv("EDGE_INGEST_KEY", "")
+        if required and payload.edge_key != required:
+            raise HTTPException(status_code=401, detail="Invalid edge key")
+
+    timestamp = datetime.now(timezone.utc)
+    db = SessionLocal()
+    try:
+        employee = None
+        if payload.employee_id:
+            employee = db.query(models.Employee).filter(models.Employee.id == str(payload.employee_id)).first()
+
+        if payload.is_valid and employee:
+            try:
+                mongo_db.get_logs_collection().insert_one(
+                    {
+                        "employee_id": employee.id,
+                        "timestamp": timestamp,
+                        "direction": payload.direction or "in",
+                        "status": "present",
+                        "reason": None,
+                        "source": "edge_ai",
+                        "confidence": payload.confidence,
+                    }
+                )
+            except Exception:
+                _publish_gate_command("invalid", reason="db_unavailable")
+                raise HTTPException(status_code=503, detail="MongoDB is not available")
+
+            with _gate_lock:
+                _gate_status["status"] = "open"
+                _gate_status["last_action"] = "auto_open_face_match"
+                _gate_status["timestamp"] = timestamp.isoformat()
+            with _edge_lock:
+                _edge_last_event["ts"] = timestamp
+                _edge_last_event["is_valid"] = True
+                _edge_last_event["employee_id"] = employee.id
+                _edge_last_event["message"] = f"Welcome {employee.name}"
+            _publish_gate_command("open", employee_id=employee.id)
+            return {"ok": True, "action": "open", "employee_id": employee.id}
+        else:
+            with _edge_lock:
+                _edge_last_event["ts"] = timestamp
+                _edge_last_event["is_valid"] = False
+                _edge_last_event["employee_id"] = payload.employee_id
+                _edge_last_event["message"] = payload.message or "Wajah tidak dikenali"
+            _publish_gate_command("invalid", reason=payload.message or "unknown_face")
+            return {"ok": True, "action": "invalid"}
+    finally:
+        db.close()
+
+
+@app.get("/audit/logins")
+def list_login_audit(
+    _current_user: models.User = Depends(auth.get_current_manager),
+    limit: int = Query(200, ge=1, le=2000),
+):
+    """Login activity (Username, Status, Timestamp) stored on the VPS via MongoDB."""
+    try:
+        cursor = (
+            mongo_db.get_audit_collection()
+            .find({"event_type": {"$in": ["login_success", "login_failed"]}})
+            .sort("timestamp", -1)
+            .limit(limit)
+        )
+        docs = list(cursor)
+    except Exception:
+        raise HTTPException(status_code=503, detail="MongoDB is not available")
+    out = []
+    for d in docs:
+        out.append({
+            "username": d.get("username"),
+            "status": d.get("status") or ("success" if d.get("event_type") == "login_success" else "failed"),
+            "timestamp": d.get("timestamp"),
+            "role": d.get("role"),
+            "user_id": d.get("user_id"),
+            "message": d.get("message"),
+        })
+    return out

@@ -40,7 +40,7 @@ def seed():
         manager_cipher, manager_iv = encrypt_password("manager123")
         manager = (
             db.query(User)
-            .filter(models.User.username == "manager")
+            .filter(User.username == "manager")
             .first()
         )
         if manager:
@@ -69,7 +69,7 @@ def seed():
         admin_cipher, admin_iv = encrypt_password("admin123")
         admin = (
             db.query(User)
-            .filter(models.User.username == "admin")
+            .filter(User.username == "admin")
             .first()
         )
         if admin:

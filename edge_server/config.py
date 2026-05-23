@@ -1,0 +1,70 @@
+"""Edge server configuration loaded from environment / .env."""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
+
+
+def _get(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
+def _get_int(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
+def _get_float(name: str, default: float) -> float:
+    raw = os.getenv(name, str(default))
+    try:
+        return float(raw)
+    except Exception:
+        return default
+
+
+@dataclass
+class Settings:
+    api_base: str
+    api_token: str
+    edge_ingest_key: str
+    mqtt_broker: str
+    mqtt_port: int
+    mqtt_username: str
+    mqtt_password: str
+    mqtt_topic_gate: str
+    mqtt_topic_heartbeat: str
+    mqtt_topic_pir: str
+    camera_index: int
+    recognition_threshold: float
+    cooldown_seconds: int
+    sync_every_seconds: int
+    frame_push_fps: int
+
+
+def load_settings() -> Settings:
+    return Settings(
+        api_base=_get("SAPA_API_BASE", "http://localhost:8080").rstrip("/"),
+        api_token=_get("SAPA_API_TOKEN"),
+        edge_ingest_key=_get("EDGE_INGEST_KEY"),
+        mqtt_broker=_get("MQTT_BROKER", "127.0.0.1"),
+        mqtt_port=_get_int("MQTT_PORT", 1883),
+        mqtt_username=_get("MQTT_USERNAME"),
+        mqtt_password=_get("MQTT_PASSWORD"),
+        mqtt_topic_gate=_get("MQTT_TOPIC_GATE", "sapa/gate"),
+        mqtt_topic_heartbeat=_get("MQTT_TOPIC_HEARTBEAT", "sapa/device/heartbeat"),
+        mqtt_topic_pir=_get("MQTT_TOPIC_PIR", "sapa/pir"),
+        camera_index=_get_int("CAMERA_INDEX", 0),
+        recognition_threshold=_get_float("RECOGNITION_THRESHOLD", 0.55),
+        cooldown_seconds=_get_int("COOLDOWN_SECONDS", 5),
+        sync_every_seconds=_get_int("SYNC_EVERY_SECONDS", 60),
+        frame_push_fps=max(1, _get_int("FRAME_PUSH_FPS", 2)),
+    )

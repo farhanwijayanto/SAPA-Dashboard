@@ -1,0 +1,18 @@
+# Kustomization untuk deploy seluruh stack SAPA dengan satu perintah:
+#   kubectl apply -k k8s/
+# Catatan:
+#  - Buat dulu Secret (lihat k8s/secrets.example.yaml) sebelum apply.
+#  - File mqtt-deployment.yaml (dev/anonymous) sengaja TIDAK di-include.
+#    Untuk production, gunakan mosquitto-production.yaml + mosquitto-nodeport.yaml
+#    yang sudah aktif di bawah.
+namespace: sapa
+
+resources:
+  - namespace.yaml
+  - db-deployment.yaml
+  - mongo-deployment.yaml
+  - mosquitto-production.yaml
+  - mosquitto-nodeport.yaml
+  - backend-deployment.yaml
+  - frontend-deployment.yaml
+  - ingress.yaml

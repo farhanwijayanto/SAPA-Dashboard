@@ -1,0 +1,40 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.trae/
+.idea/
+
+# Python (backend & edge_server)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+backend/venv/
+edge_server/venv/
+
+# Env files (never commit secrets)
+.env
+.env.*
+!.env.example
+edge_server/.env
+backend/.env
+
+# Local data / artifacts
+attendance.db
+backend/uploads/faces/
+
+# Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# Cloud / deploy artifacts
+.vercel/
+.figma/
+*.log
+
+# Kubernetes secrets (only template is committed)
+k8s/secrets.yaml

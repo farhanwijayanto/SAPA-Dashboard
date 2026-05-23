@@ -109,3 +109,41 @@ class EdgeStatus(BaseModel):
     message: Optional[str] = None
     stale: bool
     age_ms: int
+
+
+class FaceMatchEvent(BaseModel):
+    """Result from edge AI face recognition."""
+    model_config = ConfigDict(extra="forbid")
+    is_valid: bool
+    employee_id: Optional[str] = None
+    direction: Optional[str] = "in"
+    confidence: Optional[float] = None
+    message: Optional[str] = None
+    edge_key: Optional[str] = None
+
+
+class RoleBase(BaseModel):
+    division: str
+    position: str
+    description: Optional[str] = None
+
+
+class RoleCreate(RoleBase):
+    model_config = ConfigDict(extra="forbid")
+
+
+class Role(RoleBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
+class RoleStats(BaseModel):
+    id: int
+    division: str
+    position: str
+    description: Optional[str] = None
+    total: int
+    active_today: int
+    inactive_today: int

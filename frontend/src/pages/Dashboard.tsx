@@ -4,7 +4,8 @@ import {
   Camera, ClipboardList, UserPlus, Trash2, LogOut, 
   Clock, LayoutDashboard, Settings, 
   Search, Bell, ChevronLeft, ChevronRight, Menu, X,
-  CheckCircle2, AlertCircle, Users, Download, Video, VideoOff, ChevronUp, Sun, Moon
+  CheckCircle2, AlertCircle, Users, Download, ChevronUp, Sun, Moon,
+  Wifi, WifiOff, DoorOpen, DoorClosed, Eye, Info, XCircle, Briefcase
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -95,25 +96,17 @@ const Dashboard: React.FC = () => {
   const [edgeFrameOk, setEdgeFrameOk] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'employees' | 'logs' | 'manual' | 'add_employee' | 'system' | 'profile'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'employees' | 'logs' | 'manual' | 'add_employee' | 'roles' | 'system' | 'profile'>('dashboard');
   const [employeesPage, setEmployeesPage] = useState(1);
   const [employeesPageInput, setEmployeesPageInput] = useState('1');
   const [logsPage, setLogsPage] = useState(1);
   const [logsPageInput, setLogsPageInput] = useState('1');
+  const [livePage, setLivePage] = useState(1);
+  const [loginAuditPage, setLoginAuditPage] = useState(1);
   const [selectedDate, setSelectedDate] = useState<string>(() => format(new Date(), 'yyyy-MM-dd'));
   const [selectedDirection, setSelectedDirection] = useState<string>('');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('');
   const [selectedStatus, setSelectedStatus] = useState<string>('');
-  const [useWebcam, setUseWebcam] = useState(false);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const webcamStreamRef = useRef<MediaStream | null>(null);
-  const [webcamError, setWebcamError] = useState('');
-  const [edgePublishOn, setEdgePublishOn] = useState(false);
-  const [edgePublishError, setEdgePublishError] = useState('');
-  const [edgePublishLastAt, setEdgePublishLastAt] = useState<number | null>(null);
-  const edgePublishVideoRef = useRef<HTMLVideoElement | null>(null);
-  const edgePublishStreamRef = useRef<MediaStream | null>(null);
-  const edgePublishBusyRef = useRef(false);
   const registerVideoRef = useRef<HTMLVideoElement | null>(null);
   const registerStreamRef = useRef<MediaStream | null>(null);
   const [isRegisterScanning, setIsRegisterScanning] = useState(false);
@@ -126,6 +119,96 @@ const Dashboard: React.FC = () => {
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
   const [systemLoading, setSystemLoading] = useState(false);
   const [systemError, setSystemError] = useState('');
+  const [gateLoading, setGateLoading] = useState(false);
+  const [gateMessage, setGateMessage] = useState('');
+  const [gateStatus, setGateStatus] = useState<{
+    status: string;
+    last_action: string;
+    timestamp: string;
+    iot_connected?: boolean;
+    iot_last_seen?: string | null;
+    iot_age_ms?: number | null;
+  } | null>(null);
+  const [iotStatus, setIotStatus] = useState<{ connected: boolean; last_seen: string | null; age_ms: number | null } | null>(null);
+  const [loginAudit, setLoginAudit] = useState<Array<{ username: string; status: string; timestamp: string; role?: string | null; user_id?: number | null }>>([]);
+  const [loginAuditLoading, setLoginAuditLoading] = useState(false);
+  const [faceViewerOpen, setFaceViewerOpen] = useState(false);
+  const [selectedEmployeeForFaces, setSelectedEmployeeForFaces] = useState<string>('');
+  const [selectedEmployeeNameForFaces, setSelectedEmployeeNameForFaces] = useState<string>('');
+  const [employeeFaces, setEmployeeFaces] = useState<any[]>([]);
+  const [facesLoading, setFacesLoading] = useState(false);
+  const [toasts, setToasts] = useState<Array<{ id: number; tone: 'success' | 'info' | 'warning' | 'error'; title: string; message: string }>>([]);
+
+  // Confirm dialog
+  const [confirmState, setConfirmState] = useState<{
+    open: boolean;
+    title: string;
+    message: string;
+    confirmLabel: string;
+    tone: 'danger' | 'primary';
+    onConfirm: (() => void | Promise<void>) | null;
+  }>({ open: false, title: '', message: '', confirmLabel: 'Confirm', tone: 'primary', onConfirm: null });
+  const [confirmBusy, setConfirmBusy] = useState(false);
+
+  const askConfirm = (opts: {
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    tone?: 'danger' | 'primary';
+    onConfirm: () => void | Promise<void>;
+  }) => {
+    setConfirmState({
+      open: true,
+      title: opts.title,
+      message: opts.message,
+      confirmLabel: opts.confirmLabel || 'Confirm',
+      tone: opts.tone || 'primary',
+      onConfirm: opts.onConfirm,
+    });
+  };
+
+  const closeConfirm = () => {
+    if (confirmBusy) return;
+    setConfirmState(s => ({ ...s, open: false, onConfirm: null }));
+  };
+
+  const runConfirm = async () => {
+    if (!confirmState.onConfirm) return;
+    try {
+      setConfirmBusy(true);
+      await confirmState.onConfirm();
+    } finally {
+      setConfirmBusy(false);
+      setConfirmState(s => ({ ...s, open: false, onConfirm: null }));
+    }
+  };
+
+  // Roles
+  type RoleStat = {
+    id: number;
+    division: string;
+    position: string;
+    description?: string | null;
+    total: number;
+    active_today: number;
+    inactive_today: number;
+  };
+  const [roles, setRoles] = useState<RoleStat[]>([]);
+  const [rolesLoading, setRolesLoading] = useState(false);
+  const [newRole, setNewRole] = useState({ division: '', position: '', description: '' });
+  const [createRoleSaving, setCreateRoleSaving] = useState(false);
+
+  const pushToast = (tone: 'success' | 'info' | 'warning' | 'error', title: string, message: string) => {
+    const id = Date.now() + Math.random();
+    setToasts(prev => [...prev, { id, tone, title, message }]);
+    window.setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4500);
+  };
+
+  const dismissToast = (id: number) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  };
   const [users, setUsers] = useState<AppUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [createUserOpen, setCreateUserOpen] = useState(false);
@@ -184,6 +267,7 @@ const Dashboard: React.FC = () => {
   const showLogsTab = isManager || isAdmin || hasFeature('view_logs');
   const showManualTab = isManager || isAdmin || hasFeature('manual_attendance');
   const showAddEmployeeTab = isManager;
+  const showRolesTab = isManager;
   const showSystemTab = isManager || isAdmin || hasFeature('view_system');
 
   useEffect(() => {
@@ -191,12 +275,23 @@ const Dashboard: React.FC = () => {
     if (activeTab === 'logs' && !showLogsTab) setActiveTab('dashboard');
     if (activeTab === 'manual' && !showManualTab) setActiveTab('dashboard');
     if (activeTab === 'add_employee' && !showAddEmployeeTab) setActiveTab('dashboard');
+    if (activeTab === 'roles' && !showRolesTab) setActiveTab('dashboard');
     if (activeTab === 'system' && !showSystemTab) setActiveTab('dashboard');
-  }, [activeTab, showEmployeesTab, showLogsTab, showManualTab, showAddEmployeeTab, showSystemTab]);
+  }, [activeTab, showEmployeesTab, showLogsTab, showManualTab, showAddEmployeeTab, showRolesTab, showSystemTab]);
 
   useEffect(() => {
     fetchEmployees();
+    if (isManager) {
+      fetchRoles();
+    }
   }, []);
+
+  useEffect(() => {
+    if (!showRolesTab) return;
+    if (activeTab === 'roles' || activeTab === 'add_employee' || activeTab === 'manual') {
+      fetchRoles();
+    }
+  }, [activeTab, showRolesTab]);
 
   useEffect(() => {
     try {
@@ -277,8 +372,6 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     return () => {
-      stopWebcam();
-      stopEdgePublisher();
       stopRegisterScan();
     };
   }, []);
@@ -290,6 +383,83 @@ const Dashboard: React.FC = () => {
     } catch (err) {
       console.error('Failed to fetch employees', err);
     }
+  };
+
+  const fetchRoles = async () => {
+    setRolesLoading(true);
+    try {
+      const response = await api.get('/roles/stats');
+      setRoles(response.data);
+    } catch {
+      try {
+        const fallback = await api.get('/roles/');
+        setRoles((fallback.data as any[]).map(r => ({ ...r, total: 0, active_today: 0, inactive_today: 0 })));
+      } catch {
+        setRoles([]);
+      }
+    } finally {
+      setRolesLoading(false);
+    }
+  };
+
+  const handleCreateRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const division = newRole.division.trim();
+    const position = newRole.position.trim();
+    if (!division || !position) {
+      pushToast('warning', 'Field belum lengkap', 'Division dan Position wajib diisi.');
+      return;
+    }
+    setCreateRoleSaving(true);
+    try {
+      await api.post('/roles/', {
+        division,
+        position,
+        description: newRole.description.trim() || null,
+      });
+      setNewRole({ division: '', position: '', description: '' });
+      await fetchRoles();
+      pushToast('success', 'Role berhasil ditambahkan', `${division} • ${position}`);
+    } catch (err: any) {
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail;
+      let message = '';
+      if (typeof detail === 'string') {
+        message = detail;
+      } else if (Array.isArray(detail)) {
+        message = detail.map((d: any) => d?.msg || JSON.stringify(d)).join('; ');
+      } else if (status === 404) {
+        message = 'Endpoint /roles/ tidak ditemukan. Restart backend untuk memuat fitur Role.';
+      } else if (status === 500) {
+        message = 'Backend error. Restart backend agar tabel roles dibuat (bisa juga DB belum migrasi).';
+      } else if (!err?.response) {
+        message = 'Tidak bisa terhubung ke API.';
+      } else {
+        message = `Gagal (${status || '?'}). Coba lagi.`;
+      }
+      pushToast('error', 'Gagal menambahkan role', message);
+    } finally {
+      setCreateRoleSaving(false);
+    }
+  };
+
+  const handleDeleteRole = async (roleId: number, label: string) => {
+    askConfirm({
+      title: 'Hapus Role',
+      message: `Apakah kamu yakin ingin menghapus role "${label}"? Tindakan ini tidak bisa dibatalkan.`,
+      confirmLabel: 'Hapus Role',
+      tone: 'danger',
+      onConfirm: async () => {
+        try {
+          await api.delete(`/roles/${roleId}`);
+          await fetchRoles();
+          pushToast('info', 'Role dihapus', label);
+        } catch (err: any) {
+          const detail = err?.response?.data?.detail;
+          pushToast('error', 'Gagal menghapus role', String(detail || 'Coba lagi.'));
+        }
+      },
+    });
   };
 
   const fetchLogs = async () => {
@@ -332,16 +502,99 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const fetchGateStatus = async () => {
+    try {
+      const res = await api.get('/gate/status');
+      setGateStatus(res.data);
+    } catch (e: any) {
+      setGateStatus(null);
+    }
+  };
+
+  const fetchIotStatus = async () => {
+    try {
+      const res = await api.get('/iot/status');
+      setIotStatus({
+        connected: !!res.data?.connected,
+        last_seen: res.data?.last_seen ?? null,
+        age_ms: res.data?.age_ms ?? null,
+      });
+    } catch {
+      setIotStatus({ connected: false, last_seen: null, age_ms: null });
+    }
+  };
+
+  const fetchLoginAudit = async () => {
+    setLoginAuditLoading(true);
+    try {
+      const res = await api.get('/audit/logins', { params: { limit: 100 } });
+      setLoginAudit(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      setLoginAudit([]);
+    } finally {
+      setLoginAuditLoading(false);
+    }
+  };
+
+  const controlGate = async (action: 'open' | 'close') => {
+    setGateLoading(true);
+    setGateMessage('');
+    try {
+      await api.post('/gate/control', { action, gate_id: 'default' });
+      setGateMessage(`Gate ${action}ed successfully`);
+      await fetchGateStatus();
+      setTimeout(() => setGateMessage(''), 3000);
+    } catch (e: any) {
+      const msg = e.response?.data?.detail || `Failed to ${action} gate`;
+      setGateMessage(`Error: ${msg}`);
+    } finally {
+      setGateLoading(false);
+    }
+  };
+
+  const fetchEmployeeFaces = async (employeeId: string) => {
+    setFacesLoading(true);
+    try {
+      const res = await api.get(`/employees/${employeeId}/faces`);
+      setEmployeeFaces(res.data.faces || []);
+    } catch (e: any) {
+      setEmployeeFaces([]);
+    } finally {
+      setFacesLoading(false);
+    }
+  };
+
+  const openFaceViewer = async (employeeId: string, employeeName?: string) => {
+    setSelectedEmployeeForFaces(employeeId);
+    setSelectedEmployeeNameForFaces(employeeName || '');
+    setFaceViewerOpen(true);
+    await fetchEmployeeFaces(employeeId);
+  };
+
   useEffect(() => {
     if (activeTab !== 'system') return;
-    if (role !== 'manager') {
+    if (role === 'manager') {
+      fetchSystemMetrics();
+    } else {
       setSystemMetrics(null);
       setSystemError('');
-      return;
     }
-    fetchSystemMetrics();
-    const t = window.setInterval(fetchSystemMetrics, 10000);
-    return () => window.clearInterval(t);
+    fetchGateStatus();
+    fetchIotStatus();
+    if (role === 'manager') {
+      fetchLoginAudit();
+    }
+    const t = role === 'manager' ? window.setInterval(fetchSystemMetrics, 10000) : null;
+    const gt = window.setInterval(() => {
+      fetchGateStatus();
+      fetchIotStatus();
+    }, 3000);
+    const lt = role === 'manager' ? window.setInterval(fetchLoginAudit, 10000) : null;
+    return () => {
+      if (t) window.clearInterval(t);
+      window.clearInterval(gt);
+      if (lt) window.clearInterval(lt);
+    };
   }, [activeTab, role]);
 
   useEffect(() => {
@@ -400,14 +653,24 @@ const Dashboard: React.FC = () => {
   };
 
   const handleDeleteUser = async (userId: number) => {
-    if (!window.confirm('Are you sure you want to delete this user?')) return;
-    try {
-      await api.delete(`/users/${userId}`);
-      await fetchUsers();
-      appendActivity('user_delete', `User deleted: ${userId}`);
-    } catch {
-      alert('Failed to delete user');
-    }
+    const target = users.find(u => u.id === userId);
+    const label = target?.username ? `${target.username} (ID ${userId})` : `User ID ${userId}`;
+    askConfirm({
+      title: 'Hapus User',
+      message: `Apakah kamu yakin ingin menghapus ${label}? Tindakan ini tidak bisa dibatalkan.`,
+      confirmLabel: 'Hapus User',
+      tone: 'danger',
+      onConfirm: async () => {
+        try {
+          await api.delete(`/users/${userId}`);
+          await fetchUsers();
+          appendActivity('user_delete', `User deleted: ${userId}`);
+          pushToast('info', 'User dihapus', label);
+        } catch {
+          pushToast('error', 'Gagal menghapus user', 'Coba lagi.');
+        }
+      },
+    });
   };
 
   const openCreateUser = () => {
@@ -664,132 +927,9 @@ const Dashboard: React.FC = () => {
 
   const waitNextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-  const startWebcam = async () => {
-    if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      alert('Webcam access requires HTTPS (or localhost). Use https on your VPS / domain.');
-      return;
-    }
-    try {
-      setWebcamError('');
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      webcamStreamRef.current = stream;
-      setUseWebcam(true);
-      await waitNextFrame();
-      await attachStreamToVideo(videoRef.current, webcamStreamRef.current);
-    } catch (err) {
-      setUseWebcam(false);
-      setWebcamError('Webcam tidak bisa diakses. Pastikan izin camera aktif dan tidak dipakai aplikasi lain.');
-      alert('Webcam permission denied or not available.');
-    }
-  };
-
-  const stopWebcam = () => {
-    const stream = webcamStreamRef.current;
-    if (stream) {
-      stream.getTracks().forEach(t => t.stop());
-    }
-    webcamStreamRef.current = null;
-    if (videoRef.current) {
-      try {
-        videoRef.current.pause();
-      } catch {}
-      videoRef.current.srcObject = null;
-    }
-    setUseWebcam(false);
-  };
-
-  const startEdgePublisher = async () => {
-    if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      setEdgePublishError('Webcam access requires HTTPS (or localhost).');
-      return;
-    }
-    try {
-      setEdgePublishError('');
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      edgePublishStreamRef.current = stream;
-      setEdgePublishOn(true);
-      await waitNextFrame();
-      await attachStreamToVideo(edgePublishVideoRef.current, edgePublishStreamRef.current);
-    } catch {
-      setEdgePublishOn(false);
-      setEdgePublishError('Webcam tidak bisa diakses. Pastikan izin camera aktif dan tidak dipakai aplikasi lain.');
-    }
-  };
-
-  const stopEdgePublisher = () => {
-    const stream = edgePublishStreamRef.current;
-    if (stream) {
-      stream.getTracks().forEach((t) => t.stop());
-    }
-    edgePublishStreamRef.current = null;
-    edgePublishBusyRef.current = false;
-    if (edgePublishVideoRef.current) {
-      try {
-        edgePublishVideoRef.current.pause();
-      } catch {}
-      edgePublishVideoRef.current.srcObject = null;
-    }
-    setEdgePublishOn(false);
-    setEdgePublishLastAt(null);
-  };
-
-  useEffect(() => {
-    if (!edgePublishOn) return;
-    let alive = true;
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: false });
-    const tick = async () => {
-      if (!alive) return;
-      if (edgePublishError) return;
-      const v = edgePublishVideoRef.current;
-      if (!v) return;
-      if (v.readyState < 2) return;
-      const vw = v.videoWidth || 0;
-      const vh = v.videoHeight || 0;
-      if (!vw || !vh || !ctx) return;
-      if (edgePublishBusyRef.current) return;
-      edgePublishBusyRef.current = true;
-      try {
-        const targetW = Math.min(640, vw);
-        const targetH = Math.round((targetW / vw) * vh);
-        canvas.width = targetW;
-        canvas.height = targetH;
-        ctx.drawImage(v, 0, 0, targetW, targetH);
-        const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.7));
-        if (!blob) return;
-        const fd = new FormData();
-        fd.append('frame', blob, 'frame.jpg');
-        const ingestKey = (import.meta.env as any).VITE_EDGE_INGEST_KEY as string | undefined;
-        await api.post('/edge/frame', fd, {
-          headers: ingestKey ? { 'X-EDGE-KEY': ingestKey } : undefined,
-        });
-        setEdgePublishError('');
-        setEdgePublishLastAt((prev) => {
-          const nowMs = Date.now();
-          if (!prev || nowMs - prev >= 1000) return nowMs;
-          return prev;
-        });
-      } catch {
-        setEdgePublishError((prev) => prev || 'Gagal mengirim frame ke server.');
-      } finally {
-        edgePublishBusyRef.current = false;
-      }
-    };
-    const loop = async () => {
-      if (!alive) return;
-      await tick();
-      if (!alive) return;
-      window.setTimeout(loop, 350);
-    };
-    loop();
-    return () => {
-      alive = false;
-    };
-  }, [edgePublishOn, edgePublishError]);
-
   const startRegisterScan = async () => {
     if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      alert('Webcam access requires HTTPS (or localhost). Use https on your VPS / domain.');
+      pushToast('warning', 'Akses kamera membutuhkan HTTPS', 'Gunakan https pada VPS/domain, atau jalankan via localhost.');
       return;
     }
     try {
@@ -802,7 +942,7 @@ const Dashboard: React.FC = () => {
     } catch (err) {
       setIsRegisterScanning(false);
       setRegisterWebcamError('Webcam tidak bisa diakses. Pastikan izin camera aktif dan tidak dipakai aplikasi lain.');
-      alert('Webcam permission denied or not available.');
+      pushToast('error', 'Kamera tidak tersedia', 'Izin kamera ditolak atau perangkat tidak terdeteksi.');
     }
   };
 
@@ -825,7 +965,7 @@ const Dashboard: React.FC = () => {
     const v = registerVideoRef.current;
     if (!v) return;
     if (v.videoWidth === 0 || v.videoHeight === 0) {
-      alert('Camera not ready yet.');
+      pushToast('warning', 'Kamera belum siap', 'Tunggu beberapa detik lalu coba Capture lagi.');
       return;
     }
     const canvas = document.createElement('canvas');
@@ -843,28 +983,82 @@ const Dashboard: React.FC = () => {
     stopRegisterScan();
   };
 
+  const STATUS_LABELS_ID: Record<string, string> = {
+    present: 'Presensi Hadir',
+    permission: 'Izin',
+    sick: 'Izin Sakit',
+    leave: 'Izin Cuti',
+    half_day: 'Izin Setengah Hari',
+    other: 'Izin Lainnya',
+  };
+
+  const toastToneForStatus = (status: string): 'success' | 'info' | 'warning' => {
+    if (status === 'present') return 'success';
+    if (status === 'sick') return 'warning';
+    return 'info';
+  };
+
   const handleManualSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const submitted = {
+      ...manualAttendance,
+      employee_id: manualAttendance.employee_id.trim(),
+    };
+
+    if (!submitted.employee_id) {
+      pushToast('warning', 'Employee ID kosong', 'Isi Employee ID terlebih dahulu.');
+      return;
+    }
+
+    const employee = employees.find(emp => emp.id === submitted.employee_id);
+    if (!employee) {
+      pushToast(
+        'error',
+        'Employee ID tidak ditemukan',
+        `Tidak ada karyawan dengan ID ${submitted.employee_id}. Periksa kembali ID-nya.`
+      );
+      return;
+    }
+
     try {
-      await api.post('/attendance/', manualAttendance);
+      await api.post('/attendance/', submitted);
       setManualAttendance({ employee_id: '', direction: 'in', status: 'permission', reason: '' });
       fetchLogs();
       appendActivity(
         'manual_attendance',
-        `Manual ${manualAttendance.direction.toUpperCase()} ${manualAttendance.status} for ${manualAttendance.employee_id}`
+        `Manual ${submitted.direction.toUpperCase()} ${submitted.status} for ${submitted.employee_id} (${employee.name})`
       );
-    } catch (err) {
-      alert('Failed to submit manual attendance');
+
+      const statusLabel = STATUS_LABELS_ID[submitted.status] || submitted.status;
+      const tone = toastToneForStatus(submitted.status);
+
+      const title =
+        submitted.status === 'present'
+          ? 'Presensi Manual Berhasil'
+          : `${statusLabel} Berhasil Ditambahkan`;
+      const message =
+        submitted.status === 'present'
+          ? `Presensi Manual Berhasil ditambahkan untuk ID ${submitted.employee_id} (${employee.name})`
+          : `${statusLabel} berhasil ditambahkan untuk ID ${submitted.employee_id} (${employee.name})`;
+
+      pushToast(tone, title, message);
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      pushToast('error', 'Gagal menambahkan presensi', String(detail || 'Periksa koneksi atau coba lagi.'));
     }
   };
 
   const handleAddEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!faceFile) {
+      pushToast('warning', 'Face scan diperlukan', 'Klik Start Scan lalu Capture terlebih dahulu.');
+      return;
+    }
+    if (!newEmployee.division || !newEmployee.position) {
+      pushToast('warning', 'Field belum lengkap', 'Pilih Division dan Position.');
+      return;
+    }
     try {
-      if (!faceFile) {
-        alert('Face scan is required. Click Start Scan and Capture first.');
-        return;
-      }
       const created = await api.post('/employees/', newEmployee);
       const createdEmployee: Employee = created.data;
       const fd = new FormData();
@@ -872,26 +1066,49 @@ const Dashboard: React.FC = () => {
       await api.post(`/employees/${createdEmployee.id}/face`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
+      const justAddedName = newEmployee.name;
       setNewEmployee({ name: '', dob: '', division: '', position: '' });
       setFaceFile(null);
       if (capturedPreviewUrl) URL.revokeObjectURL(capturedPreviewUrl);
       setCapturedPreviewUrl('');
       await fetchEmployees();
-      appendActivity('employee_create', `Employee created: ${createdEmployee.id} - ${newEmployee.name}`);
-      alert(`Employee added successfully with ID: ${createdEmployee.id}`);
-    } catch (err) {
-      alert('Failed to add employee');
+      if (isManager) await fetchRoles();
+      appendActivity('employee_create', `Employee created: ${createdEmployee.id} - ${justAddedName}`);
+      pushToast(
+        'success',
+        'Employee berhasil ditambahkan',
+        `ID ${createdEmployee.id}${justAddedName ? ` (${justAddedName})` : ''}`
+      );
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      let msg = '';
+      if (typeof detail === 'string') msg = detail;
+      else if (Array.isArray(detail)) msg = detail.map((d: any) => d?.msg || JSON.stringify(d)).join('; ');
+      else if (!err?.response) msg = 'Tidak bisa terhubung ke API.';
+      else msg = `Gagal (${err.response.status || '?'}). Coba lagi.`;
+      pushToast('error', 'Gagal menambahkan employee', msg);
     }
   };
 
   const handleDeleteEmployee = async (empId: string) => {
-    if (!window.confirm('Are you sure you want to delete this employee?')) return;
-    try {
-      await api.delete(`/employees/${empId}`);
-      alert('Employee deleted');
-    } catch (err) {
-      alert('Failed to delete employee');
-    }
+    const target = employees.find(e => e.id === empId);
+    const label = target?.name ? `${target.name} (ID ${empId})` : `ID ${empId}`;
+    askConfirm({
+      title: 'Hapus Employee',
+      message: `Apakah kamu yakin ingin menghapus ${label}? Foto wajah dan data terkait juga akan dihapus.`,
+      confirmLabel: 'Hapus Employee',
+      tone: 'danger',
+      onConfirm: async () => {
+        try {
+          await api.delete(`/employees/${empId}`);
+          pushToast('info', 'Employee dihapus', label);
+          await fetchEmployees();
+          if (isManager) await fetchRoles();
+        } catch (err) {
+          pushToast('error', 'Gagal menghapus employee', 'Coba lagi.');
+        }
+      },
+    });
   };
 
   const handleLogout = () => {
@@ -916,6 +1133,59 @@ const Dashboard: React.FC = () => {
       return e.name.toLowerCase().includes(q) || e.id.toLowerCase().includes(q);
     });
   }, [employees, searchQuery]);
+
+  // Live Attendance: today-only logs (auto resets when day changes)
+  const liveTodayLogs = useMemo(() => {
+    const todayKey = format(now, 'yyyy-MM-dd');
+    return logs.filter(l => {
+      try {
+        const d = new Date(l.timestamp);
+        if (isNaN(d.getTime())) return false;
+        return format(d, 'yyyy-MM-dd') === todayKey;
+      } catch {
+        return false;
+      }
+    });
+  }, [logs, now]);
+
+  const livePerPage = 5;
+  const liveTotalPages = Math.max(1, Math.ceil(liveTodayLogs.length / livePerPage));
+  useEffect(() => {
+    if (livePage > liveTotalPages) setLivePage(liveTotalPages);
+    if (livePage < 1) setLivePage(1);
+  }, [livePage, liveTotalPages]);
+  const pagedLiveLogs = useMemo(() => {
+    const start = (livePage - 1) * livePerPage;
+    return liveTodayLogs.slice(start, start + livePerPage);
+  }, [liveTodayLogs, livePage]);
+
+  // Login Activity: 5 rows per page
+  const loginAuditPerPage = 5;
+  const loginAuditTotalPages = Math.max(1, Math.ceil(loginAudit.length / loginAuditPerPage));
+  useEffect(() => {
+    if (loginAuditPage > loginAuditTotalPages) setLoginAuditPage(loginAuditTotalPages);
+    if (loginAuditPage < 1) setLoginAuditPage(1);
+  }, [loginAuditPage, loginAuditTotalPages]);
+  const pagedLoginAudit = useMemo(() => {
+    const start = (loginAuditPage - 1) * loginAuditPerPage;
+    return loginAudit.slice(start, start + loginAuditPerPage);
+  }, [loginAudit, loginAuditPage]);
+
+  const buildPageButtons = (total: number, current: number): (number | '...')[] => {
+    if (total <= 7) {
+      const out: (number | '...')[] = [];
+      for (let i = 1; i <= total; i++) out.push(i);
+      return out;
+    }
+    const out: (number | '...')[] = [1];
+    const left = Math.max(2, current - 1);
+    const right = Math.min(total - 1, current + 1);
+    if (left > 2) out.push('...');
+    for (let i = left; i <= right; i++) out.push(i);
+    if (right < total - 1) out.push('...');
+    out.push(total);
+    return out;
+  };
 
   const logsPerPage = 30;
   const logsTotalPages = Math.max(1, Math.ceil(filteredLogs.length / logsPerPage));
@@ -1202,6 +1472,18 @@ const Dashboard: React.FC = () => {
                 }}
               />
             )}
+            {showRolesTab && (
+              <SidebarItem
+                icon={<Briefcase size={20} />}
+                label="Role Employee"
+                active={activeTab === 'roles'}
+                collapsed={isSidebarCollapsed}
+                onClick={() => {
+                  setActiveTab('roles');
+                  if (isMobile) setMobileNavOpen(false);
+                }}
+              />
+            )}
             {showSystemTab && (
               <SidebarItem
                 icon={<Settings size={20} />}
@@ -1419,37 +1701,13 @@ const Dashboard: React.FC = () => {
             >
               <div className="relative aspect-video rounded-[22px] overflow-hidden bg-slate-800">
                 {streamUrl ? (
-                  <>
-                    <img
-                      src={edgeFrameSrc}
-                      alt="Camera Feed"
-                      className="w-full h-full object-cover transform -scale-x-100 opacity-90 group-hover:opacity-100 transition-opacity"
-                      onLoad={() => setEdgeFrameOk(true)}
-                      onError={() => setEdgeFrameOk(false)}
-                    />
-                    <video
-                      ref={edgePublishVideoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="absolute -left-[99999px] -top-[99999px] w-px h-px opacity-0 pointer-events-none"
-                    />
-                  </>
-                ) : useWebcam ? (
-                  <div className="absolute inset-0">
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="w-full h-full object-cover transform -scale-x-100 opacity-95 group-hover:opacity-100 transition-opacity"
-                    />
-                    {webcamError && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 text-white text-xs font-bold px-4 text-center">
-                        {webcamError}
-                      </div>
-                    )}
-                  </div>
+                  <img
+                    src={edgeFrameSrc}
+                    alt=""
+                    className={`w-full h-full object-cover transform -scale-x-100 opacity-90 group-hover:opacity-100 transition-opacity ${edgeFrameOk ? '' : 'invisible'}`}
+                    onLoad={() => setEdgeFrameOk(true)}
+                    onError={() => setEdgeFrameOk(false)}
+                  />
                 ) : (
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-600">
                     <Camera size={64} className="mb-4 animate-pulse" />
@@ -1461,185 +1719,169 @@ const Dashboard: React.FC = () => {
                     <Camera size={56} className="mb-3 animate-pulse" />
                     <div className="text-sm font-black uppercase tracking-widest">Waiting for Edge Camera</div>
                     <div className="mt-1 text-xs font-semibold text-white/80">
-                      Aktifkan kamera di Dashboard untuk mulai mengirim frame.
+                      Buka halaman <span className="font-black">/edge</span> di edge device untuk mengaktifkan kamera.
                     </div>
-                    {edgePublishError && (
-                      <div className="mt-2 text-xs font-bold text-red-200">{edgePublishError}</div>
-                    )}
-                    <button
-                      onClick={edgePublishOn ? stopEdgePublisher : startEdgePublisher}
-                      className="pointer-events-auto mt-4 inline-flex items-center px-4 py-2 rounded-xl bg-white/10 text-white text-xs font-black uppercase tracking-widest backdrop-blur-md border border-white/10 hover:bg-white/15 transition-all"
-                    >
-                      {edgePublishOn ? (
-                        <>
-                          <VideoOff size={16} className="mr-2" /> Stop Camera
-                        </>
-                      ) : (
-                        <>
-                          <Video size={16} className="mr-2" /> Activate Camera
-                        </>
-                      )}
-                    </button>
                   </div>
                 )}
-                {/* Overlay UI */}
-                <div className="absolute inset-0 pointer-events-none p-6 flex flex-col justify-between">
-                  <div className="flex justify-between items-start">
-                    <div className="bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 flex items-center space-x-2">
-                      <div className="w-2 h-2 bg-red-500 rounded-full animate-ping"></div>
-                      <span className="text-[10px] font-black text-white uppercase tracking-widest">Edge Camera</span>
+                {/* Overlay UI - hidden until frame is live */}
+                {edgeFrameOk && (
+                  <div className="absolute inset-0 pointer-events-none p-6 flex flex-col justify-between">
+                    <div className="flex justify-between items-start">
+                      <div className="bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 flex items-center space-x-2">
+                        <div className="w-2 h-2 rounded-full bg-red-500 animate-ping"></div>
+                        <span className="text-[10px] font-black text-white uppercase tracking-widest">Edge Camera</span>
+                      </div>
+                      <div className="bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 text-[10px] font-bold text-white/70">
+                        {format(now, 'HH:mm:ss')}
+                      </div>
                     </div>
-                    <div className="bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 text-[10px] font-bold text-white/70">
-                      {format(now, 'HH:mm:ss')}
+                    <div className="flex justify-between items-end">
+                      <div className="bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 text-[10px] font-bold text-white/70">
+                        Source: /edge
+                      </div>
+                      <div className="opacity-0">.</div>
                     </div>
+                    {/* Scanline Effect */}
+                    <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.1)_50%),linear-gradient(90deg,rgba(255,0,0,0.03),rgba(0,255,0,0.01),rgba(0,0,255,0.03))] bg-[length:100%_2px,3px_100%] pointer-events-none opacity-20"></div>
                   </div>
-                  <div className="flex justify-between items-end">
-                    <div className="bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 text-[10px] font-bold text-white/70">
-                      {edgePublishError
-                        ? edgePublishError
-                        : edgePublishLastAt
-                          ? `Upload OK • ${Math.max(0, Math.round((Date.now() - edgePublishLastAt) / 100) / 10)}s`
-                          : 'Upload: OFF'}
-                    </div>
-                    <div className="opacity-0">.</div>
-                  </div>
-                  {/* Scanline Effect */}
-                  <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.1)_50%),linear-gradient(90deg,rgba(255,0,0,0.03),rgba(0,255,0,0.01),rgba(0,0,255,0.03))] bg-[length:100%_2px,3px_100%] pointer-events-none opacity-20"></div>
-                </div>
-
-                <div className="absolute bottom-4 left-4 flex items-center gap-2">
-                  {streamUrl ? (
-                    edgePublishOn ? (
-                      <button
-                        onClick={stopEdgePublisher}
-                        className="pointer-events-auto inline-flex items-center px-3 py-2 rounded-xl bg-white/10 text-white text-xs font-black uppercase tracking-widest backdrop-blur-md border border-white/10 hover:bg-white/15 transition-all"
-                      >
-                        <VideoOff size={16} className="mr-2" /> Stop Camera
-                      </button>
-                    ) : (
-                      <button
-                        onClick={startEdgePublisher}
-                        className="pointer-events-auto inline-flex items-center px-3 py-2 rounded-xl bg-white/10 text-white text-xs font-black uppercase tracking-widest backdrop-blur-md border border-white/10 hover:bg-white/15 transition-all"
-                      >
-                        <Video size={16} className="mr-2" /> Activate Camera
-                      </button>
-                    )
-                  ) : (
-                    useWebcam ? (
-                      <button
-                        onClick={stopWebcam}
-                        className="pointer-events-auto inline-flex items-center px-3 py-2 rounded-xl bg-white/10 text-white text-xs font-black uppercase tracking-widest backdrop-blur-md border border-white/10 hover:bg-white/15 transition-all"
-                      >
-                        <VideoOff size={16} className="mr-2" /> Stop
-                      </button>
-                    ) : (
-                      <button
-                        onClick={startWebcam}
-                        className="pointer-events-auto inline-flex items-center px-3 py-2 rounded-xl bg-white/10 text-white text-xs font-black uppercase tracking-widest backdrop-blur-md border border-white/10 hover:bg-white/15 transition-all"
-                      >
-                        <Video size={16} className="mr-2" /> Use Webcam
-                      </button>
-                    )
-                  )}
-                </div>
+                )}
               </div>
             </motion.div>
 
-            {/* Attendance Analytics */}
-            <motion.div 
+            {/* Live Attendance (right column, beside the edge camera) */}
+            <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
-              className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-xl border border-slate-100 dark:border-slate-800 flex flex-col"
+              className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col"
             >
-              <h3 className="text-lg font-bold text-slate-800 mb-6 flex items-center">
-                <ClipboardList className="mr-2 text-indigo-500" /> Hourly Activity
-              </h3>
-              <div className="flex-1 h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData}>
-                    <defs>
-                      <linearGradient id="colorPresent" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                    <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#94a3b8'}} />
-                    <YAxis hide />
-                    <Tooltip 
-                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                    />
-                    <Area type="monotone" dataKey="present" stroke="#6366f1" strokeWidth={3} fillOpacity={1} fill="url(#colorPresent)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="mt-6 space-y-4">
-                <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl">
-                  <div className="flex items-center">
-                    <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center text-indigo-600 dark:text-indigo-300 mr-3">
-                      <UserPlus size={18} />
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-700 dark:text-slate-100">Recent Scans</p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">Last 10 minutes</p>
-                    </div>
-                  </div>
-                  <span className="text-lg font-black text-slate-800 dark:text-slate-100">{logs.length}</span>
+              <div className="p-5 border-b border-slate-50 dark:border-slate-800 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-black text-slate-800 dark:text-slate-100 flex items-center">
+                    <ClipboardList className="mr-2 text-indigo-500" size={18} /> Live Attendance
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-0.5">
+                    Hari ini ({format(now, 'yyyy-MM-dd')}) — auto-reset
+                  </p>
                 </div>
+                <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest whitespace-nowrap">
+                  {liveTodayLogs.length} entri
+                </div>
+              </div>
+              <div className="p-4 flex-1 flex flex-col">
+                {liveTodayLogs.length === 0 ? (
+                  <div className="flex-1 flex items-center justify-center text-sm font-bold text-slate-400 py-8 text-center">
+                    Belum ada presensi hari ini.
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-2 flex-1">
+                      {pagedLiveLogs.map((l) => (
+                        <div key={`${l.employee_id}-${l.timestamp}-${l.direction}`} className="flex items-start justify-between bg-slate-50 dark:bg-slate-800/60 rounded-2xl px-4 py-3">
+                          <div className="min-w-0">
+                            <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">
+                              {(() => {
+                                const d = (l.direction || 'in').toLowerCase();
+                                if (d === 'in') return 'ATTEND';
+                                if (d === 'out') return 'PRESENT';
+                                return (l.direction || '').toUpperCase();
+                              })()} {l.status}
+                            </div>
+                            <div className="text-xs font-black text-slate-800 dark:text-slate-100 truncate">
+                              {l.employee?.name ? `${l.employee.name} (${l.employee_id})` : l.employee_id}
+                            </div>
+                            {l.reason && (
+                              <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 truncate">
+                                {l.reason}
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-[10px] font-bold text-slate-400 ml-3 whitespace-nowrap">
+                            {(() => {
+                              try {
+                                const d = new Date(l.timestamp);
+                                return !isNaN(d.getTime()) ? format(d, 'HH:mm:ss') : '';
+                              } catch {
+                                return '';
+                              }
+                            })()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {liveTotalPages > 1 && (
+                      <div className="mt-4 flex items-center justify-center gap-1.5 flex-wrap">
+                        <button
+                          onClick={() => setLivePage(p => Math.max(1, p - 1))}
+                          disabled={livePage <= 1}
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-700 dark:text-slate-100 text-[10px] font-black transition-all border border-slate-200 dark:border-slate-700"
+                        >
+                          Prev
+                        </button>
+                        {buildPageButtons(liveTotalPages, livePage).map((p, idx) =>
+                          p === '...' ? (
+                            <div key={`live-dots-${idx}`} className="px-1.5 text-slate-400 dark:text-slate-500 text-[10px] font-black">…</div>
+                          ) : (
+                            <button
+                              key={`live-${p}`}
+                              onClick={() => setLivePage(p)}
+                              className={
+                                p === livePage
+                                  ? 'px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-black transition-all shadow-md shadow-indigo-500/20'
+                                  : 'px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-100 text-[10px] font-black transition-all border border-slate-200 dark:border-slate-700'
+                              }
+                            >
+                              {p}
+                            </button>
+                          )
+                        )}
+                        <button
+                          onClick={() => setLivePage(p => Math.min(liveTotalPages, p + 1))}
+                          disabled={livePage >= liveTotalPages}
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-700 dark:text-slate-100 text-[10px] font-black transition-all border border-slate-200 dark:border-slate-700"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </motion.div>
           </div>
 
+          {/* Hourly Activity - full width below */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-100 dark:border-slate-800 overflow-hidden"
+            className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-xl border border-slate-100 dark:border-slate-800 flex flex-col"
           >
-            <div className="p-4 sm:p-8 border-b border-slate-50 dark:border-slate-800 flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100">Live Attendance</h2>
-                <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">Latest attendance events</p>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100 flex items-center">
+                <ClipboardList className="mr-2 text-indigo-500" /> Hourly Activity
+              </h3>
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 dark:bg-slate-800 rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200">
+                <UserPlus size={14} className="text-indigo-500" />
+                Recent: <span className="font-black">{logs.length}</span>
               </div>
             </div>
-            <div className="p-6">
-              {logs.length === 0 ? (
-                <div className="text-sm font-bold text-slate-400">No attendance yet.</div>
-              ) : (
-                <div className="space-y-3">
-                  {logs.slice(0, 8).map((l) => (
-                    <div key={`${l.employee_id}-${l.timestamp}-${l.direction}`} className="flex items-start justify-between bg-slate-50 dark:bg-slate-800/60 rounded-2xl px-5 py-4">
-                      <div className="min-w-0">
-                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                          {(() => {
-                            const d = (l.direction || 'in').toLowerCase();
-                            if (d === 'in') return 'ATTEND';
-                            if (d === 'out') return 'PRESENT';
-                            return (l.direction || '').toUpperCase();
-                          })()} {l.status}
-                        </div>
-                        <div className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
-                          {l.employee?.name ? `${l.employee.name} (${l.employee_id})` : l.employee_id}
-                        </div>
-                        {l.reason && (
-                          <div className="text-xs font-bold text-slate-500 dark:text-slate-400 truncate">
-                            {l.reason}
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-xs font-bold text-slate-400 ml-4 whitespace-nowrap">
-                        {(() => {
-                          try {
-                            const d = new Date(l.timestamp);
-                            return !isNaN(d.getTime()) ? format(d, 'HH:mm:ss') : '';
-                          } catch {
-                            return '';
-                          }
-                        })()}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+            <div className="h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData}>
+                  <defs>
+                    <linearGradient id="colorPresent" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{fontSize: 10, fill: '#94a3b8'}} />
+                  <YAxis hide />
+                  <Tooltip
+                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                  />
+                  <Area type="monotone" dataKey="present" stroke="#6366f1" strokeWidth={3} fillOpacity={1} fill="url(#colorPresent)" />
+                </AreaChart>
+              </ResponsiveContainer>
             </div>
           </motion.div>
             </>
@@ -1671,9 +1913,7 @@ const Dashboard: React.FC = () => {
                       <th className="px-4 sm:px-8 py-3 sm:py-4 text-[10px] sm:text-xs font-black text-slate-400 uppercase tracking-widest">Name</th>
                       <th className="px-4 sm:px-8 py-3 sm:py-4 text-[10px] sm:text-xs font-black text-slate-400 uppercase tracking-widest">Division</th>
                       <th className="px-4 sm:px-8 py-3 sm:py-4 text-[10px] sm:text-xs font-black text-slate-400 uppercase tracking-widest">Position</th>
-                      {role === 'manager' && (
-                        <th className="px-4 sm:px-8 py-3 sm:py-4 text-[10px] sm:text-xs font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
-                      )}
+                      <th className="px-4 sm:px-8 py-3 sm:py-4 text-[10px] sm:text-xs font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
@@ -1683,16 +1923,24 @@ const Dashboard: React.FC = () => {
                         <td className="px-4 sm:px-8 py-4 sm:py-5 text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-100">{e.name}</td>
                         <td className="px-4 sm:px-8 py-4 sm:py-5 text-xs sm:text-sm font-bold text-slate-600 dark:text-slate-300">{e.division}</td>
                         <td className="px-4 sm:px-8 py-4 sm:py-5 text-xs sm:text-sm font-bold text-slate-600 dark:text-slate-300">{e.position}</td>
-                        {role === 'manager' && (
-                          <td className="px-4 sm:px-8 py-4 sm:py-5 text-right">
+                        <td className="px-4 sm:px-8 py-4 sm:py-5 text-right">
+                          <div className="flex items-center justify-end gap-2">
                             <button
-                              onClick={() => handleDeleteEmployee(e.id)}
-                              className="inline-flex items-center px-3 py-2 rounded-xl bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 text-xs font-black transition-all border border-red-200 dark:border-red-900/40"
+                              onClick={() => openFaceViewer(e.id, e.name)}
+                              className="inline-flex items-center px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 text-blue-600 text-xs font-black transition-all border border-blue-200 dark:border-blue-900/40"
                             >
-                              <Trash2 size={14} className="mr-2" /> Delete
+                              <Eye size={14} className="mr-2" /> View Faces
                             </button>
-                          </td>
-                        )}
+                            {role === 'manager' && (
+                              <button
+                                onClick={() => handleDeleteEmployee(e.id)}
+                                className="inline-flex items-center px-3 py-2 rounded-xl bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 text-red-600 text-xs font-black transition-all border border-red-200 dark:border-red-900/40"
+                              >
+                                <Trash2 size={14} className="mr-2" /> Delete
+                              </button>
+                            )}
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1784,14 +2032,50 @@ const Dashboard: React.FC = () => {
               </div>
               <div className="p-4 sm:p-8">
                 <form onSubmit={handleManualSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <input
-                    type="text"
-                    placeholder="Employee ID"
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 dark:text-slate-100 placeholder-slate-500 dark:placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    value={manualAttendance.employee_id}
-                    onChange={(e) => setManualAttendance({ ...manualAttendance, employee_id: e.target.value })}
-                    required
-                  />
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Employee ID"
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 dark:text-slate-100 placeholder-slate-500 dark:placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      value={manualAttendance.employee_id}
+                      onChange={(e) => setManualAttendance({ ...manualAttendance, employee_id: e.target.value })}
+                      required
+                    />
+                    {(() => {
+                      const trimmed = manualAttendance.employee_id.trim();
+                      if (!trimmed) return null;
+                      const matched = employees.find(emp => emp.id === trimmed);
+                      if (matched) {
+                        return (
+                          <div className="mt-2 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/40 px-3 py-2.5">
+                            <div className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest inline-flex items-center">
+                              <CheckCircle2 size={12} className="mr-1.5" /> Karyawan ditemukan
+                            </div>
+                            <div className="mt-1 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs font-bold text-slate-700 dark:text-slate-200">
+                              <div>
+                                <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Name</div>
+                                <div className="truncate">{matched.name}</div>
+                              </div>
+                              <div>
+                                <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Division</div>
+                                <div className="truncate">{matched.division || '--'}</div>
+                              </div>
+                              <div>
+                                <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Position</div>
+                                <div className="truncate">{matched.position || '--'}</div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="mt-2 px-3 py-2.5 rounded-xl bg-rose-50 dark:bg-rose-900/20 border border-rose-100 dark:border-rose-900/40 text-xs font-black text-rose-600 dark:text-rose-300 inline-flex items-center">
+                          <AlertCircle size={12} className="mr-1.5" />
+                          ID tidak ditemukan
+                        </div>
+                      );
+                    })()}
+                  </div>
                   <select
                     className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500/20"
                     value={manualAttendance.direction}
@@ -1865,22 +2149,42 @@ const Dashboard: React.FC = () => {
                     onChange={(e) => setNewEmployee({ ...newEmployee, dob: e.target.value })}
                     required
                   />
-                  <input
-                    type="text"
-                    placeholder="Division"
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 dark:text-slate-100 placeholder-slate-500 dark:placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    value={newEmployee.division}
-                    onChange={(e) => setNewEmployee({ ...newEmployee, division: e.target.value })}
-                    required
-                  />
-                  <input
-                    type="text"
-                    placeholder="Position"
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 dark:text-slate-100 placeholder-slate-500 dark:placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    value={newEmployee.position}
-                    onChange={(e) => setNewEmployee({ ...newEmployee, position: e.target.value })}
-                    required
-                  />
+                  {(() => {
+                    const divisions = Array.from(new Set(roles.map(r => r.division))).sort();
+                    const positionsForDivision = roles
+                      .filter(r => r.division === newEmployee.division)
+                      .map(r => r.position);
+                    const positions = Array.from(new Set(positionsForDivision)).sort();
+                    return (
+                      <>
+                        <select
+                          className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500/20"
+                          value={newEmployee.division}
+                          onChange={(e) => setNewEmployee({ ...newEmployee, division: e.target.value, position: '' })}
+                          required
+                        >
+                          <option value="">— Pilih Division —</option>
+                          {divisions.map(d => <option key={d} value={d}>{d}</option>)}
+                        </select>
+                        <select
+                          className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-60"
+                          value={newEmployee.position}
+                          onChange={(e) => setNewEmployee({ ...newEmployee, position: e.target.value })}
+                          required
+                          disabled={!newEmployee.division}
+                        >
+                          <option value="">{newEmployee.division ? '— Pilih Position —' : '— Pilih Division dulu —'}</option>
+                          {positions.map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                        {divisions.length === 0 && (
+                          <div className="text-xs font-bold text-amber-600 dark:text-amber-400 inline-flex items-center">
+                            <AlertCircle size={12} className="mr-1.5" />
+                            Belum ada Role. Tambahkan role di tab "Role Employee" dulu.
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
                   <button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl text-sm font-black transition-all shadow-lg shadow-indigo-500/20">
                     Add Employee
                   </button>
@@ -1951,6 +2255,126 @@ const Dashboard: React.FC = () => {
                 </div>
               </div>
             </motion.div>
+          )}
+
+          {activeTab === 'roles' && showRolesTab && (
+            <div className="space-y-6">
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-100 dark:border-slate-800 overflow-hidden"
+              >
+                <div className="p-4 sm:p-8 border-b border-slate-50 dark:border-slate-800 flex items-center justify-between gap-4 flex-wrap">
+                  <div>
+                    <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100 inline-flex items-center">
+                      <Briefcase size={20} className="mr-2 text-indigo-500" /> Role Employee
+                    </h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">
+                      Kelola Division & Position perusahaan, lihat jumlah anggota per role.
+                    </p>
+                  </div>
+                  <button
+                    onClick={fetchRoles}
+                    disabled={rolesLoading}
+                    className="px-4 py-2 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-700 dark:text-slate-100 rounded-xl text-sm font-black transition-all border border-slate-200 dark:border-slate-700"
+                  >
+                    Refresh
+                  </button>
+                </div>
+
+                <div className="p-4 sm:p-8 border-b border-slate-50 dark:border-slate-800">
+                  <form onSubmit={handleCreateRole} className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <input
+                      type="text"
+                      placeholder="Division (mis: Production)"
+                      className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 dark:text-slate-100 placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      value={newRole.division}
+                      onChange={(e) => setNewRole({ ...newRole, division: e.target.value })}
+                      required
+                    />
+                    <input
+                      type="text"
+                      placeholder="Position (mis: Operator)"
+                      className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 dark:text-slate-100 placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      value={newRole.position}
+                      onChange={(e) => setNewRole({ ...newRole, position: e.target.value })}
+                      required
+                    />
+                    <input
+                      type="text"
+                      placeholder="Deskripsi (opsional)"
+                      className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 dark:text-slate-100 placeholder-slate-500 outline-none focus:ring-2 focus:ring-indigo-500/20"
+                      value={newRole.description}
+                      onChange={(e) => setNewRole({ ...newRole, description: e.target.value })}
+                    />
+                    <button
+                      type="submit"
+                      disabled={createRoleSaving}
+                      className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-sm font-black transition-all shadow-lg shadow-indigo-500/20"
+                    >
+                      {createRoleSaving ? 'Menyimpan…' : 'Tambah Role'}
+                    </button>
+                  </form>
+                </div>
+
+                <div className="p-4 sm:p-8">
+                  {rolesLoading && roles.length === 0 ? (
+                    <div className="text-sm font-bold text-slate-400 text-center py-12">Loading…</div>
+                  ) : roles.length === 0 ? (
+                    <div className="flex flex-col items-center text-center py-12">
+                      <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-3">
+                        <Briefcase size={28} className="text-slate-400" />
+                      </div>
+                      <div className="text-sm font-black text-slate-700 dark:text-slate-200">Belum ada Role</div>
+                      <div className="text-xs font-bold text-slate-400 mt-1">Tambahkan role pertama menggunakan form di atas.</div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {roles.map(r => (
+                        <div
+                          key={r.id}
+                          className="rounded-3xl border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 p-5 flex flex-col gap-3"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">{r.division}</div>
+                              <div className="text-base font-black text-slate-800 dark:text-slate-100 truncate">{r.position}</div>
+                              {r.description && (
+                                <div className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-1 line-clamp-2">
+                                  {r.description}
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => handleDeleteRole(r.id, `${r.division} • ${r.position}`)}
+                              className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl transition-all"
+                              title="Hapus role"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2">
+                            <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 px-3 py-3 text-center">
+                              <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Total</div>
+                              <div className="text-lg font-black text-slate-800 dark:text-slate-100">{r.total}</div>
+                            </div>
+                            <div className="rounded-2xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/40 px-3 py-3 text-center">
+                              <div className="text-[9px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-300">Aktif</div>
+                              <div className="text-lg font-black text-emerald-700 dark:text-emerald-200">{r.active_today}</div>
+                            </div>
+                            <div className="rounded-2xl bg-rose-50 dark:bg-rose-900/20 border border-rose-100 dark:border-rose-900/40 px-3 py-3 text-center">
+                              <div className="text-[9px] font-black uppercase tracking-widest text-rose-600 dark:text-rose-300">Tidak Aktif</div>
+                              <div className="text-lg font-black text-rose-700 dark:text-rose-200">{r.inactive_today}</div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            </div>
           )}
 
           {activeTab === 'profile' && (
@@ -2198,60 +2622,194 @@ const Dashboard: React.FC = () => {
 
           {activeTab === 'system' && showSystemTab && (
             <>
+              {/* Gate Control - Available for both manager and admin */}
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-100 dark:border-slate-800 overflow-hidden"
               >
-                <div className="p-4 sm:p-8 border-b border-slate-50 dark:border-slate-800 flex items-center justify-between">
+                <div className="p-4 sm:p-8 border-b border-slate-50 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
-                    <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100">Login Activity</h2>
-                    <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">Recent login events</p>
+                    <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100">Gate Control</h2>
+                    <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">Manual gate open/close. Status diambil dari MQTT (perangkat IoT).</p>
                   </div>
-                  <button
-                    onClick={() => {
-                      const next = activityEvents.filter(e => e.type !== 'login');
-                      setActivityEvents(next);
-                      try {
-                        localStorage.setItem(activityKey, JSON.stringify(next));
-                      } catch {}
-                    }}
-                    className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-xl text-sm font-black transition-all border border-slate-200"
-                  >
-                    Clear
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-flex items-center px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border ${
+                        iotStatus?.connected
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-900/40'
+                          : 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-900/20 dark:text-rose-300 dark:border-rose-900/40'
+                      }`}
+                    >
+                      {iotStatus?.connected ? <Wifi size={12} className="mr-1.5" /> : <WifiOff size={12} className="mr-1.5" />}
+                      {iotStatus?.connected ? 'Gate ONLINE' : 'Gate OFFLINE'}
+                    </span>
+                    <span
+                      className={`inline-flex items-center px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border ${
+                        gateStatus?.status === 'open'
+                          ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-900/40'
+                          : 'bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
+                      }`}
+                    >
+                      {gateStatus?.status === 'open' ? <DoorOpen size={12} className="mr-1.5" /> : <DoorClosed size={12} className="mr-1.5" />}
+                      Gate {gateStatus?.status?.toUpperCase() || 'CLOSED'}
+                    </span>
+                  </div>
                 </div>
-                <div className="p-6">
-                  {activityEvents.filter(e => e.type === 'login').length === 0 ? (
-                    <div className="text-sm font-bold text-slate-400">No login activity yet.</div>
-                  ) : (
-                    <div className="space-y-3">
-                      {activityEvents.filter(e => e.type === 'login').slice(0, 12).map((e) => (
-                        <div key={`${e.ts}-${e.type}-${e.message}`} className="flex items-start justify-between bg-slate-50 rounded-2xl px-5 py-4">
-                          <div className="min-w-0">
-                            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                              {e.type}
-                            </div>
-                            <div className="text-sm font-bold text-slate-800 truncate">
-                              {e.message}
-                            </div>
-                          </div>
-                          <div className="text-xs font-bold text-slate-400 ml-4 whitespace-nowrap">
-                            {(() => {
-                              try {
-                                const d = new Date(e.ts);
-                                return !isNaN(d.getTime()) ? format(d, 'HH:mm:ss') : '';
-                              } catch {
-                                return '';
-                              }
-                            })()}
-                          </div>
-                        </div>
-                      ))}
+
+                <div className="p-4 sm:p-8 space-y-4">
+                  {gateStatus?.last_action && gateStatus.last_action !== 'none' && (
+                    <div className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                      Last action: <span className="text-slate-800 dark:text-slate-100">{gateStatus.last_action}</span>
+                      {gateStatus.timestamp ? ` @ ${new Date(gateStatus.timestamp).toLocaleString('id-ID')}` : ''}
                     </div>
                   )}
+                  {iotStatus && !iotStatus.connected && (
+                    <div className="rounded-2xl px-5 py-4 text-sm font-bold bg-rose-50 dark:bg-rose-900/20 border border-rose-100 dark:border-rose-900/30 text-rose-700 dark:text-rose-200">
+                      Perangkat IoT (ESP32) belum terdeteksi di MQTT. Tombol nonaktif sampai device online.
+                    </div>
+                  )}
+                  {gateMessage && (
+                    <div className={`rounded-2xl px-5 py-4 text-sm font-bold ${
+                      gateMessage.includes('Error')
+                        ? 'bg-rose-50 dark:bg-rose-900/20 border border-rose-100 dark:border-rose-900/30 text-rose-700 dark:text-rose-200'
+                        : 'bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/30 text-emerald-700 dark:text-emerald-200'
+                    }`}>
+                      {gateMessage}
+                    </div>
+                  )}
+
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <button
+                      onClick={() => controlGate('open')}
+                      disabled={gateLoading || !iotStatus?.connected}
+                      className="flex-1 inline-flex items-center justify-center px-6 py-3 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-sm font-black transition-all"
+                    >
+                      <DoorOpen size={16} className="mr-2" />
+                      {gateLoading ? 'Processing...' : 'Open Gate'}
+                    </button>
+                    <button
+                      onClick={() => controlGate('close')}
+                      disabled={gateLoading || !iotStatus?.connected}
+                      className="flex-1 inline-flex items-center justify-center px-6 py-3 bg-red-500 hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-sm font-black transition-all"
+                    >
+                      <DoorClosed size={16} className="mr-2" />
+                      {gateLoading ? 'Processing...' : 'Close Gate'}
+                    </button>
+                  </div>
                 </div>
               </motion.div>
+
+              {/* Login Activity - Manager only, sourced from VPS MongoDB audit_logs */}
+              {role === 'manager' && (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-white dark:bg-slate-900 rounded-3xl shadow-xl border border-slate-100 dark:border-slate-800 overflow-hidden"
+                >
+                  <div className="p-4 sm:p-8 border-b border-slate-50 dark:border-slate-800 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100">Login Activity</h2>
+                      <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">Tersimpan di VPS (Username, Status, Timestamp)</p>
+                    </div>
+                    <button
+                      onClick={fetchLoginAudit}
+                      disabled={loginAuditLoading}
+                      className="px-4 py-2 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-700 dark:text-slate-100 rounded-xl text-sm font-black transition-all border border-slate-200 dark:border-slate-700"
+                    >
+                      Refresh
+                    </button>
+                  </div>
+                  <div className="p-6">
+                    {loginAuditLoading && loginAudit.length === 0 ? (
+                      <div className="text-sm font-bold text-slate-400">Loading…</div>
+                    ) : loginAudit.length === 0 ? (
+                      <div className="text-sm font-bold text-slate-400">Belum ada aktivitas login.</div>
+                    ) : (
+                      <>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left">
+                            <thead>
+                              <tr className="bg-slate-50/50 dark:bg-slate-800/50">
+                                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">Username</th>
+                                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</th>
+                                <th className="px-4 py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest">Timestamp</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
+                              {pagedLoginAudit.map((row, idx) => (
+                                <tr key={`${row.username}-${row.timestamp}-${idx}`} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-all">
+                                  <td className="px-4 py-3 text-sm font-bold text-slate-800 dark:text-slate-100">
+                                    {row.username || '--'}
+                                    {row.role ? <span className="ml-2 text-[10px] font-black text-slate-400 uppercase">{row.role}</span> : null}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <span className={`px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-widest border ${
+                                      row.status === 'success'
+                                        ? 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-900/40'
+                                        : 'bg-rose-50 text-rose-600 border-rose-100 dark:bg-rose-900/20 dark:text-rose-300 dark:border-rose-900/40'
+                                    }`}>
+                                      {row.status}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-xs font-bold text-slate-500">
+                                    {(() => {
+                                      try {
+                                        const d = new Date(row.timestamp);
+                                        return !isNaN(d.getTime()) ? format(d, 'yyyy-MM-dd HH:mm:ss') : '';
+                                      } catch { return ''; }
+                                    })()}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        {loginAuditTotalPages > 1 && (
+                          <div className="mt-5 flex flex-col sm:flex-row items-center justify-between gap-3">
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400">
+                              Halaman {loginAuditPage} dari {loginAuditTotalPages} ({loginAudit.length} entri)
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap justify-center">
+                              <button
+                                onClick={() => setLoginAuditPage(p => Math.max(1, p - 1))}
+                                disabled={loginAuditPage <= 1}
+                                className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-700 dark:text-slate-100 text-xs font-black transition-all border border-slate-200 dark:border-slate-700"
+                              >
+                                Prev
+                              </button>
+                              {buildPageButtons(loginAuditTotalPages, loginAuditPage).map((p, idx) =>
+                                p === '...' ? (
+                                  <div key={`la-dots-${idx}`} className="px-2 text-slate-400 dark:text-slate-500 text-xs font-black">…</div>
+                                ) : (
+                                  <button
+                                    key={`la-${p}`}
+                                    onClick={() => setLoginAuditPage(p)}
+                                    className={
+                                      p === loginAuditPage
+                                        ? 'px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-black transition-all shadow-lg shadow-indigo-500/20'
+                                        : 'px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-100 text-xs font-black transition-all border border-slate-200 dark:border-slate-700'
+                                    }
+                                  >
+                                    {p}
+                                  </button>
+                                )
+                              )}
+                              <button
+                                onClick={() => setLoginAuditPage(p => Math.min(loginAuditTotalPages, p + 1))}
+                                disabled={loginAuditPage >= loginAuditTotalPages}
+                                className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 text-slate-700 dark:text-slate-100 text-xs font-black transition-all border border-slate-200 dark:border-slate-700"
+                              >
+                                Next
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </motion.div>
+              )}
 
               {role === 'manager' && (
                 <motion.div
@@ -2792,6 +3350,198 @@ const Dashboard: React.FC = () => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Face Viewer Modal */}
+      <AnimatePresence>
+        {faceViewerOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+            onMouseDown={() => setFaceViewerOpen(false)}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.15 }}
+              className="w-full max-w-3xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden"
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-lg font-black text-slate-900 dark:text-slate-50 inline-flex items-center">
+                    <Eye size={18} className="mr-2" /> Face Snapshots
+                  </div>
+                  <div className="text-sm font-bold text-slate-500 dark:text-slate-400 mt-1">
+                    Employee ID: <span className="text-slate-800 dark:text-slate-100">{selectedEmployeeForFaces || '--'}</span>
+                  </div>
+                  <div className="text-sm font-bold text-slate-500 dark:text-slate-400 mt-0.5">
+                    Employee Name: <span className="text-slate-800 dark:text-slate-100">{selectedEmployeeNameForFaces || '--'}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFaceViewerOpen(false)}
+                  className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-100 text-xs font-black transition-all border border-slate-200 dark:border-slate-700"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="p-6 max-h-[80vh] overflow-y-auto">
+                {facesLoading ? (
+                  <div className="text-sm font-bold text-slate-400 text-center py-12">Loading…</div>
+                ) : employeeFaces.length === 0 ? (
+                  <div className="flex flex-col items-center py-12 text-center">
+                    <div className="w-16 h-16 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mb-3">
+                      <Camera size={28} className="text-slate-400" />
+                    </div>
+                    <div className="text-sm font-black text-slate-700 dark:text-slate-200">
+                      Belum ada gambar wajah
+                    </div>
+                    <div className="text-xs font-bold text-slate-400 mt-1">
+                      Karyawan ini belum di-scan wajahnya saat registrasi.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-6">
+                    {employeeFaces.map((f) => (
+                      <a
+                        key={f.filename}
+                        href={resolveBackendUrl(f.url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block rounded-3xl overflow-hidden border border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 shadow-lg hover:shadow-2xl transition-all"
+                      >
+                        <img
+                          src={resolveBackendUrl(f.url)}
+                          alt={f.filename}
+                          onError={(ev) => {
+                            (ev.currentTarget as HTMLImageElement).style.display = 'none';
+                          }}
+                          className="block w-auto h-auto max-w-[600px] max-h-[60vh] object-contain mx-auto"
+                        />
+                        <div className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400 text-center">
+                          {f.filename}
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                )}
+                <div className="mt-6 text-xs font-bold text-slate-500 dark:text-slate-400 text-center">
+                  AI face recognition di edge server menggunakan gambar ini sebagai referensi (face embedding) untuk match wajah live.
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Confirm Dialog */}
+      <AnimatePresence>
+        {confirmState.open && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[150] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+            onMouseDown={() => closeConfirm()}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.98 }}
+              transition={{ duration: 0.15 }}
+              className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden"
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="p-6 flex items-start gap-4">
+                <div
+                  className={`shrink-0 w-12 h-12 rounded-2xl flex items-center justify-center ${
+                    confirmState.tone === 'danger'
+                      ? 'bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-300'
+                      : 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-300'
+                  }`}
+                >
+                  {confirmState.tone === 'danger' ? <Trash2 size={22} /> : <AlertCircle size={22} />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-base font-black text-slate-900 dark:text-slate-50">{confirmState.title}</div>
+                  <div className="text-sm font-bold text-slate-500 dark:text-slate-400 mt-1 break-words">
+                    {confirmState.message}
+                  </div>
+                </div>
+              </div>
+              <div className="px-6 pb-6 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={confirmBusy}
+                  onClick={closeConfirm}
+                  className="px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-100 text-sm font-black transition-all border border-slate-200 dark:border-slate-700 disabled:opacity-60"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={confirmBusy}
+                  onClick={runConfirm}
+                  className={`px-4 py-2.5 rounded-xl text-sm font-black text-white transition-all shadow-lg disabled:opacity-60 ${
+                    confirmState.tone === 'danger'
+                      ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-500/20'
+                      : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-500/20'
+                  }`}
+                >
+                  {confirmBusy ? 'Memproses…' : confirmState.confirmLabel}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Toasts */}
+      <div className="fixed top-4 right-4 z-[200] flex flex-col gap-3 w-[calc(100vw-2rem)] max-w-sm pointer-events-none">
+        <AnimatePresence>
+          {toasts.map(t => {
+            const toneStyles = {
+              success: 'border-emerald-200 bg-white text-emerald-700 dark:bg-slate-900 dark:border-emerald-900/40 dark:text-emerald-200',
+              info: 'border-indigo-200 bg-white text-indigo-700 dark:bg-slate-900 dark:border-indigo-900/40 dark:text-indigo-200',
+              warning: 'border-amber-200 bg-white text-amber-700 dark:bg-slate-900 dark:border-amber-900/40 dark:text-amber-200',
+              error: 'border-rose-200 bg-white text-rose-700 dark:bg-slate-900 dark:border-rose-900/40 dark:text-rose-200',
+            }[t.tone];
+            const Icon =
+              t.tone === 'success' ? CheckCircle2
+              : t.tone === 'info' ? Info
+              : t.tone === 'warning' ? AlertCircle
+              : XCircle;
+            return (
+              <motion.div
+                key={t.id}
+                layout
+                initial={{ opacity: 0, x: 24, scale: 0.96 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 24, scale: 0.96 }}
+                transition={{ duration: 0.18 }}
+                className={`pointer-events-auto rounded-2xl border shadow-2xl px-4 py-3 flex items-start gap-3 ${toneStyles}`}
+              >
+                <Icon size={20} className="shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-black truncate">{t.title}</div>
+                  <div className="text-xs font-bold text-slate-600 dark:text-slate-300 mt-0.5 break-words">{t.message}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => dismissToast(t.id)}
+                  className="shrink-0 p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400"
+                >
+                  <X size={16} />
+                </button>
+              </motion.div>
+            );
+          })}
+        </AnimatePresence>
+      </div>
     </div>
   );
 };

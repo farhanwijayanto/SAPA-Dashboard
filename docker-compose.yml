@@ -37,6 +37,14 @@ services:
       MONGODB_COLLECTION_ATTENDANCE: attendance_logs
       MONGODB_COLLECTION_AUDIT: audit_logs
       MQTT_BROKER: mqtt
+      MQTT_PORT: "1883"
+      MQTT_TOPIC_GATE: sapa/gate
+      MQTT_TOPIC_ATTENDANCE: sapa/attendance
+      MQTT_TOPIC_DEVICE_STATUS: sapa/device/status
+      MQTT_TOPIC_DEVICE_HEARTBEAT: sapa/device/heartbeat
+      MQTT_TOPIC_PIR: sapa/pir
+      IOT_OFFLINE_AFTER_SECONDS: "15"
+      EDGE_INGEST_KEY: ""
       SECRET_KEY: supersecretkey
     ports:
       - "8080:8000"

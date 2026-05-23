@@ -23,7 +23,14 @@ function App() {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/edge" element={<Edge />} />
+        <Route
+          path="/edge"
+          element={
+            <PrivateRoute>
+              <Edge />
+            </PrivateRoute>
+          }
+        />
         <Route 
           path="/dashboard" 
           element={

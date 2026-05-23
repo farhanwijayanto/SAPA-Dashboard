@@ -21,12 +21,27 @@ data:
     listener 1883 0.0.0.0
 
   acl: |
+    # Backend (FastAPI di k8s) — boleh publish ke gate, baca-tulis attendance,
+    # baca status & heartbeat dari ESP32 / edge.
     user backend
-    topic readwrite sapa/attendance
     topic write sapa/gate
+    topic readwrite sapa/attendance
+    topic read sapa/device/status
+    topic read sapa/device/heartbeat
+    topic read sapa/pir
 
+    # ESP32 (gate hardware) — terima perintah gate, kirim heartbeat / pir.
     user esp32
     topic read sapa/gate
+    topic write sapa/device/heartbeat
+    topic write sapa/device/status
+    topic write sapa/pir
+    topic write sapa/attendance
+
+    # Edge Server (AI face recognition) — kirim heartbeat & attendance, baca gate.
+    user edge
+    topic read sapa/gate
+    topic write sapa/device/heartbeat
     topic write sapa/attendance
 ---
 apiVersion: v1
@@ -36,7 +51,7 @@ metadata:
   namespace: sapa
 spec:
   accessModes:
-  - ReadWriteOnce
+    - ReadWriteOnce
   resources:
     requests:
       storage: 1Gi
@@ -46,8 +61,12 @@ kind: Deployment
 metadata:
   name: sapa-mosquitto
   namespace: sapa
+  labels:
+    app: sapa-mosquitto
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: sapa-mosquitto
@@ -57,33 +76,40 @@ spec:
         app: sapa-mosquitto
     spec:
       containers:
-      - name: mosquitto
-        image: eclipse-mosquitto:2
-        ports:
-        - name: mqtt
-          containerPort: 1883
-        volumeMounts:
-        - name: config
-          mountPath: /mosquitto/config/mosquitto.conf
-          subPath: mosquitto.conf
-        - name: config
-          mountPath: /mosquitto/config/acl
-          subPath: acl
-        - name: secret
-          mountPath: /mosquitto/config/passwords
-          subPath: passwords
-        - name: data
-          mountPath: /mosquitto/data
+        - name: mosquitto
+          image: eclipse-mosquitto:2
+          ports:
+            - name: mqtt
+              containerPort: 1883
+          volumeMounts:
+            - name: config
+              mountPath: /mosquitto/config/mosquitto.conf
+              subPath: mosquitto.conf
+            - name: config
+              mountPath: /mosquitto/config/acl
+              subPath: acl
+            - name: secret
+              mountPath: /mosquitto/config/passwords
+              subPath: passwords
+            - name: data
+              mountPath: /mosquitto/data
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
       volumes:
-      - name: config
-        configMap:
-          name: sapa-mosquitto-config
-      - name: secret
-        secret:
-          secretName: sapa-mosquitto-auth
-      - name: data
-        persistentVolumeClaim:
-          claimName: sapa-mosquitto-data
+        - name: config
+          configMap:
+            name: sapa-mosquitto-config
+        - name: secret
+          secret:
+            secretName: sapa-mosquitto-auth
+        - name: data
+          persistentVolumeClaim:
+            claimName: sapa-mosquitto-data
 ---
 apiVersion: v1
 kind: Service
@@ -94,6 +120,6 @@ spec:
   selector:
     app: sapa-mosquitto
   ports:
-  - name: mqtt
-    port: 1883
-    targetPort: 1883
+    - name: mqtt
+      port: 1883
+      targetPort: 1883

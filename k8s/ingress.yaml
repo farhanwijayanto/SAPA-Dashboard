@@ -1,41 +1,34 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: sapa-api-ingress
+  name: sapa-ingress
   namespace: sapa
   annotations:
-    kubernetes.io/ingress.class: nginx
-    nginx.ingress.kubernetes.io/use-regex: "true"
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
 spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - sapa.farhn.dev
+      secretName: sapa-farhn-dev-tls
   rules:
-  - host: sapa.example.com
-    http:
-      paths:
-      - path: /api(/|$)(.*)
-        pathType: ImplementationSpecific
-        backend:
-          service:
-            name: sapa-backend
-            port:
-              number: 8000
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: sapa-frontend-ingress
-  namespace: sapa
-  annotations:
-    kubernetes.io/ingress.class: nginx
-spec:
-  rules:
-  - host: sapa.example.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: sapa-frontend
-            port:
-              number: 80
+    - host: sapa.farhn.dev
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: sapa-backend
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sapa-frontend
+                port:
+                  number: 80

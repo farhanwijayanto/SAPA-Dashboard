@@ -1,10 +1,26 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sapa-mongo-data
+  namespace: sapa
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sapa-mongo
   namespace: sapa
+  labels:
+    app: sapa-mongo
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: sapa-mongo
@@ -14,10 +30,33 @@ spec:
         app: sapa-mongo
     spec:
       containers:
-      - name: mongo
-        image: mongo:6
-        ports:
-        - containerPort: 27017
+        - name: mongo
+          image: mongo:6
+          ports:
+            - containerPort: 27017
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --quiet
+                - --eval
+                - "db.runCommand({ ping: 1 }).ok"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sapa-mongo-data
 ---
 apiVersion: v1
 kind: Service
@@ -28,6 +67,6 @@ spec:
   selector:
     app: sapa-mongo
   ports:
-  - port: 27017
-    targetPort: 27017
-
+    - name: mongo
+      port: 27017
+      targetPort: 27017

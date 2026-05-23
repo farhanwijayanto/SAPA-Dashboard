@@ -147,20 +147,24 @@ const Edge: React.FC = () => {
 
   const borderClass =
     state === 'ok'
-      ? 'border-emerald-500 shadow-emerald-500/20'
+      ? 'border-emerald-400 shadow-emerald-500/40 ring-4 ring-emerald-400/50'
       : state === 'fail'
-        ? 'border-red-500 shadow-red-500/20'
+        ? 'border-red-500 shadow-red-500/40 ring-4 ring-red-500/50'
         : 'border-slate-400/60 shadow-slate-500/10';
 
   const badgeClass =
     state === 'ok'
-      ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/20'
+      ? 'bg-emerald-500/20 text-emerald-100 border-emerald-400/40'
       : state === 'fail'
-        ? 'bg-red-500/15 text-red-200 border-red-500/20'
+        ? 'bg-red-500/20 text-red-100 border-red-400/40'
         : 'bg-slate-500/15 text-slate-200 border-white/10';
 
   const label =
-    state === 'ok' ? 'BERHASIL' : state === 'fail' ? 'GAGAL' : 'MENUNGGU...';
+    state === 'ok'
+      ? 'PRESENSI BERHASIL'
+      : state === 'fail'
+        ? 'PRESENSI GAGAL'
+        : 'MENUNGGU...';
 
   const sub =
     (status && !status.stale && (status.message || (status.employee_id ? `ID: ${status.employee_id}` : null))) || 'Arahkan wajah ke kamera';
@@ -214,6 +218,26 @@ const Edge: React.FC = () => {
                 {clockText}
               </div>
             </div>
+
+            {/* Center banner for OK / FAIL */}
+            {state !== 'idle' && (
+              <div className="absolute inset-x-0 bottom-6 flex items-center justify-center px-4 pointer-events-none">
+                <div
+                  className={`inline-flex items-center gap-2 px-4 py-2 rounded-2xl border backdrop-blur-md shadow-lg ${
+                    state === 'ok'
+                      ? 'bg-emerald-500/30 border-emerald-300/60 text-emerald-50'
+                      : 'bg-red-500/30 border-red-300/60 text-red-50'
+                  }`}
+                >
+                  {state === 'ok' ? <CheckCircle2 size={16} /> : <XCircle size={16} />}
+                  <div className="text-xs font-black tracking-wide">
+                    {state === 'ok' ? 'Presensi Berhasil' : 'Presensi Gagal'}
+                    <span className="font-bold opacity-90"> — {state === 'ok' ? 'Wajah Terdaftar' : 'Wajah Tidak Dikenali'}</span>
+                    {state === 'ok' && status?.employee_id ? <span className="font-bold opacity-80"> • ID {status.employee_id}</span> : null}
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="flex items-end justify-between">
               <div className="max-w-[70%]">
