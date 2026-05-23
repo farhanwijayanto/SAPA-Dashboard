@@ -71,7 +71,7 @@ git commit -m "Initial SAPA 1.2"
 ::        https://github.com/farhn/sapa.git
 
 :: 1.5 hubungkan & push
-git remote add origin https://github.com/<USER>/sapa.git
+git remote add origin https://github.com/farhanwijayanto/SAPA-Dashboard.git
 git push -u origin main
 ```
 
@@ -117,9 +117,22 @@ sudo ufw allow 31883/tcp     # MQTT NodePort untuk laptop edge & ESP32
 sudo ufw allow 8472/udp      # flannel VXLAN
 sudo ufw --force enable
 
-# 2.4 swap WAJIB off (kubeadm requirement)
-sudo swapoff -a
-sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+# 2.4 swap → JANGAN dimatikan untuk VPS RAM kecil/dinamis.
+#     Sebaliknya: pastikan swap aktif sebagai cushion (cegah VPS reboot/OOM).
+#     Cek swap saat ini:
+swapon --show
+free -h
+
+# Bila belum ada swap, buat swap file 4 GB (aman, idempotent):
+if ! sudo swapon --show | grep -q swapfile; then
+  sudo fallocate -l 4G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+fi
+sudo sysctl vm.swappiness=10
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swappiness.conf
 
 # 2.5 module kernel + sysctl
 sudo tee /etc/modules-load.d/k8s.conf <<EOF
@@ -146,7 +159,7 @@ sudo sysctl --system
 sudo mkdir -p /opt && sudo chown $USER:$USER /opt
 
 # 3.2 clone
-git clone https://github.com/<USER>/sapa.git /opt/sapa
+git clone https://github.com/farhanwijayanto/SAPA-Dashboard.git /opt/sapa
 cd /opt/sapa
 ls
 ```
@@ -185,11 +198,28 @@ sudo apt-mark hold kubelet kubeadm kubectl
 
 ### 4.3 Init control-plane (single-node)
 
+> **VPS RAM kecil / dinamis (burstable)?** Bila kubeadm preflight memunculkan
+> `[ERROR Mem]: the system RAM (xxx MB) is less than the minimum 1700 MB`,
+> ikuti perintah **alternatif** di bawah. File konfigurasi `k8s/kubeadm-config.yaml`
+> sudah menyertakan: kubelet `failSwapOn: false`, swap `LimitedSwap`,
+> `systemReserved`/`kubeReserved` 256 Mi, dan eviction threshold supaya kernel
+> tidak OOM-kill `sshd`/`kubelet` saat tertekan.
+
 ```bash
+# OPSI A — VPS dengan RAM ≥ 2 GB (preflight lolos)
 sudo kubeadm init \
   --pod-network-cidr=10.244.0.0/16 \
   --apiserver-advertise-address=$(hostname -I | awk '{print $1}')
 
+# OPSI B — VPS RAM kecil / dinamis (burstable). Pakai config + bypass preflight Mem.
+sudo kubeadm init \
+  --config /opt/sapa/k8s/kubeadm-config.yaml \
+  --ignore-preflight-errors=Mem,Swap
+```
+
+Salah satu opsi saja yang dipilih. Setelah init sukses:
+
+```bash
 # kubectl untuk user biasa
 mkdir -p $HOME/.kube
 sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
@@ -593,6 +623,62 @@ kubectl -n sapa logs -f deploy/sapa-mosquitto
 | ESP32 tidak konek MQTT | Password user `esp32` salah, atau UFW VPS belum allow 31883 dari IP publik ISP ESP32. |
 | Cert HTTPS belum keluar | DNS A record belum propagate, atau Cloudflare proxy aktif. Set ke "DNS only" lalu `kubectl -n sapa describe certificate sapa-farhn-dev-tls`. |
 | Mau update kode | Di Windows: edit → `git push`. Di VPS: `cd /opt/sapa && git pull` lalu rebuild image (lihat §12). |
+| `kubeadm init` error `[ERROR Mem]` | Pakai `--config k8s/kubeadm-config.yaml --ignore-preflight-errors=Mem,Swap` (lihat §4.3 Opsi B), pastikan swap 4 GB aktif (lihat §2.4). |
+| Pod `Pending` `Insufficient memory` | Node sedang sempit; kurangi replica yang tidak perlu (`mqtt-deployment.yaml` versi dev). Atau naikkan swap, lalu `kubectl rollout restart deploy/...`. |
+| SSH putus / VPS reboot saat deploy | Hampir selalu karena kernel OOM-kill `sshd`. Cek `dmesg -T \| grep -i oom`. Solusi: aktifkan swap (§2.4) + pakai `kubeadm-config.yaml` (`systemReserved`+`evictionSoft`) supaya kubelet evict pod jauh sebelum sshd kena. |
+
+---
+
+## 13) Tuning untuk VPS dengan RAM kecil / dinamis (burstable)
+
+VPS "dynamic RAM" biasanya menampilkan baseline ~1 GB padahal plan-nya bisa burst ke beberapa GB saat ada beban. kubeadm preflight melihat angka *current* di `/proc/meminfo` saja, jadi sering ditolak walau plan-nya cukup. Kombinasi pengaturan berikut sudah dipakai dokumen ini dan **tidak** akan menyebabkan VPS reboot atau koneksi putus.
+
+| Pengaturan | Lokasi | Tujuan |
+|------------|--------|--------|
+| Swap file 4 GB + `vm.swappiness=10` | host (§2.4) | Cushion ketika RAM live di bawah limit. Kernel pakai disk dulu, **bukan OOM-kill**. |
+| `kubeadm init --ignore-preflight-errors=Mem,Swap` | §4.3 Opsi B | Lewatkan check awal yang gagal di RAM live <1700 MB. |
+| `failSwapOn: false`, `memorySwap.swapBehavior: LimitedSwap` | `k8s/kubeadm-config.yaml` | kubelet tidak crash saat swap aktif (didukung resmi sejak 1.28). |
+| `systemReserved` 256 Mi + `kubeReserved` 256 Mi | `k8s/kubeadm-config.yaml` | Total 512 Mi disisihkan untuk OS+kubelet → `sshd`, containerd, kubelet aman walau pod menyala-padam. |
+| `evictionSoft memory.available: 300Mi` (grace 30s) + `evictionHard 150Mi` | `k8s/kubeadm-config.yaml` | Kubelet **menggusur pod aplikasi** dulu sebelum kernel sampai pada titik OOM-kill. SSH/kubelet tetap hidup. |
+| `requests` rendah (50m / 128 Mi), `limits` tinggi (1 CPU / 768 Mi) | `k8s/*-deployment.yaml` | Pod lulus scheduling saat RAM live kecil; saat VPS burst, pod boleh pakai sampai limit. |
+
+Cara menerapkan kalau Anda sudah init dengan opsi default (RAM live cukup) tapi belakangan mau switch ke profil low-RAM:
+
+```bash
+# 13.1 aktifkan swap (jika belum)
+if ! sudo swapon --show | grep -q swapfile; then
+  sudo fallocate -l 4G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+fi
+
+# 13.2 tambah konfigurasi kubelet runtime (drop-in)
+sudo tee /etc/systemd/system/kubelet.service.d/20-low-ram.conf >/dev/null <<'EOF'
+[Service]
+Environment="KUBELET_EXTRA_ARGS=--fail-swap-on=false \
+  --system-reserved=cpu=100m,memory=256Mi \
+  --kube-reserved=cpu=100m,memory=256Mi \
+  --eviction-hard=memory.available<150Mi,nodefs.available<5% \
+  --eviction-soft=memory.available<300Mi \
+  --eviction-soft-grace-period=memory.available=30s \
+  --eviction-max-pod-grace-period=60"
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart kubelet
+
+# 13.3 verifikasi node aman
+kubectl describe node | grep -A2 Allocatable
+kubectl describe node | grep -i evict
+```
+
+Apa yang **TIDAK** disarankan (penyebab umum VPS reboot / SSH putus saat tertekan RAM):
+
+- Mematikan swap di VPS dynamic-RAM. Hilangkan cushion → kernel langsung OOM-kill, sering kena `sshd` atau `kubelet`.
+- Set `requests.memory` besar (≥512 Mi) untuk semua deployment di node single-control-plane RAM kecil. Pod akan `Pending`.
+- `vm.overcommit_memory=2` di host. Kernel jadi terlalu konservatif, container Python (FastAPI/uvicorn) sering gagal `mmap`.
+- Menjalankan `docker build` berat (face_recognition / dlib) di VPS yang sama. Build image edge-server **selalu** dilakukan di laptop, bukan VPS — VPS hanya butuh image backend (FastAPI ringan) dan frontend (Nginx + static).
 
 ---
 

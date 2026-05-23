@@ -65,11 +65,11 @@ spec:
             periodSeconds: 10
           resources:
             requests:
-              cpu: "100m"
-              memory: "256Mi"
+              cpu: "50m"
+              memory: "128Mi"
             limits:
               cpu: "1000m"
-              memory: "1Gi"
+              memory: "768Mi"
       volumes:
         - name: data
           persistentVolumeClaim:

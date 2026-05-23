@@ -1,0 +1,46 @@
+# Konfigurasi kubeadm + kubelet untuk VPS dengan RAM kecil / dinamis (burstable).
+# Pemakaian:
+#   sudo kubeadm init --config k8s/kubeadm-config.yaml --ignore-preflight-errors=Mem
+#
+# Yang dilakukan:
+#  - Tetap aktifkan swap di host sebagai cushion → VPS tidak akan reboot karena OOM.
+#  - kubelet diizinkan jalan walau swap on (failSwapOn: false).
+#  - Eviction threshold ringan agar kubelet menggusur pod tertentu sebelum kernel
+#    OOM-kill proses kritis (sshd, kubelet, containerd).
+#  - systemReserved / kubeReserved menahan RAM untuk OS+kubelet sehingga koneksi SSH
+#    tidak ikut terbunuh saat node tertekan.
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: InitConfiguration
+nodeRegistration:
+  criSocket: unix:///run/containerd/containerd.sock
+  kubeletExtraArgs:
+    fail-swap-on: "false"
+---
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: ClusterConfiguration
+kubernetesVersion: stable-1.30
+networking:
+  podSubnet: 10.244.0.0/16
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+failSwapOn: false
+memorySwap:
+  swapBehavior: LimitedSwap
+# Sisakan RAM untuk OS + kubelet supaya kernel tidak OOM-kill sshd
+systemReserved:
+  cpu: "100m"
+  memory: "256Mi"
+kubeReserved:
+  cpu: "100m"
+  memory: "256Mi"
+# Soft eviction → kubelet evict pod 30 detik sebelum hard threshold
+evictionHard:
+  memory.available: "150Mi"
+  nodefs.available: "5%"
+evictionSoft:
+  memory.available: "300Mi"
+evictionSoftGracePeriod:
+  memory.available: "30s"
+evictionMaxPodGracePeriod: 60
+maxPods: 60
