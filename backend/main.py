@@ -20,6 +20,16 @@ models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="SAPA IoT Dashboard API")
 
+
+@app.get("/")
+def root():
+    return {"service": "sapa", "ok": True}
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
+
 _edge_lock = Lock()
 _edge_last_event = {
     "ts": datetime.now(timezone.utc),
@@ -128,11 +138,23 @@ def _user_to_dict(user: models.User):
         "permissions": perms,
     }
 
-# Add CORS middleware
+# Add CORS middleware.
+# Origins are taken from CORS_ALLOW_ORIGINS (comma-separated). When unset OR
+# set to "*", we fall back to a permissive configuration WITHOUT credentials
+# (browsers reject `*` + credentials anyway). For production, set:
+#   CORS_ALLOW_ORIGINS=https://sapa.farhn.dev,https://www.sapa.farhn.dev
+_cors_origins_raw = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
+if _cors_origins_raw == "*" or not _cors_origins_raw:
+    _cors_origins: list[str] = ["*"]
+    _cors_allow_credentials = False
+else:
+    _cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+    _cors_allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, replace with specific origins
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

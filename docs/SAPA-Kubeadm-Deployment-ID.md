@@ -254,6 +254,8 @@ kubectl -n ingress-nginx get pods -w
 
 Forward port 80/443 publik → NodePort 30080/30443 (iptables):
 
+> Catatan: rule ini dipersist dengan `iptables-persistent` (`netfilter-persistent save`). **Jangan** menjalankan `iptables -F` atau `iptables -t nat -F` setelahnya — selain memutus SSH (lihat §11.1), rule REDIRECT ini juga ikut hilang sehingga `sapa.farhn.dev` tidak bisa diakses dari publik.
+
 ```bash
 sudo iptables -t nat -A PREROUTING -p tcp --dport 80  -j REDIRECT --to-port 30080
 sudo iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 30443
@@ -275,11 +277,22 @@ kubectl -n cert-manager get pods -w
 
 ```bash
 sudo apt install -y docker.io
-sudo usermod -aG docker $USER && newgrp docker
+sudo usermod -aG docker $USER
+
+# Aktifkan group `docker` di shell saat ini. Pilih salah satu:
+#   a) tutup terminal lalu ssh masuk lagi (paling sederhana)
+#   b) `exec sg docker -c bash`   (tetap di sesi yang sama)
+#   c) jalankan command docker dengan `sudo` selama belum logout
+exec sg docker -c bash
 
 cd /opt/sapa
 docker build -t sapa-backend:1.2  ./backend
 docker build -t sapa-frontend:1.2 ./frontend
+
+#docker run jalan tapi docker build tidak. Ini bug klasik legacy docker builder: container build kadang dibuat sebelum chain DOCKER final, jadi paket di-DROP. Solusi paling cepat: paksa build pakai network host.
+docker build --network=host -t sapa-backend:1.2 ./backend
+docker build --network=host -t sapa-frontend:1.2 ./frontend
+
 
 # import ke containerd k8s namespace agar pod bisa pakai image lokal tanpa registry
 docker save sapa-backend:1.2  | sudo ctr -n k8s.io images import -
@@ -624,8 +637,38 @@ kubectl -n sapa logs -f deploy/sapa-mosquitto
 | Cert HTTPS belum keluar | DNS A record belum propagate, atau Cloudflare proxy aktif. Set ke "DNS only" lalu `kubectl -n sapa describe certificate sapa-farhn-dev-tls`. |
 | Mau update kode | Di Windows: edit → `git push`. Di VPS: `cd /opt/sapa && git pull` lalu rebuild image (lihat §12). |
 | `kubeadm init` error `[ERROR Mem]` | Pakai `--config k8s/kubeadm-config.yaml --ignore-preflight-errors=Mem,Swap` (lihat §4.3 Opsi B), pastikan swap 4 GB aktif (lihat §2.4). |
+| Reset kubeadm tanpa memutus SSH | **JANGAN** jalankan `iptables -F`/`iptables -t nat -F` saat UFW aktif. Pakai langkah aman di §11.1. |
 | Pod `Pending` `Insufficient memory` | Node sedang sempit; kurangi replica yang tidak perlu (`mqtt-deployment.yaml` versi dev). Atau naikkan swap, lalu `kubectl rollout restart deploy/...`. |
 | SSH putus / VPS reboot saat deploy | Hampir selalu karena kernel OOM-kill `sshd`. Cek `dmesg -T \| grep -i oom`. Solusi: aktifkan swap (§2.4) + pakai `kubeadm-config.yaml` (`systemReserved`+`evictionSoft`) supaya kubelet evict pod jauh sebelum sshd kena. |
+
+### 11.1 Reset kubeadm tanpa memutus SSH
+
+**JANGAN** jalankan `iptables -F` atau `iptables -t nat -F` di VPS yang UFW-nya aktif. Perintah itu menghapus rule UFW yang membolehkan SSH masuk + rule conntrack `RELATED,ESTABLISHED` — paket SSH balik akan langsung di-DROP, koneksi Anda freeze sampai timeout. Pakai urutan ini:
+
+```bash
+# 1. reset kubeadm (sudah ikut bersihkan rule milik kube-proxy/kubelet)
+sudo kubeadm reset -f
+
+# 2. bersihkan CNI
+sudo rm -rf /etc/cni/net.d /var/lib/cni /opt/cni/bin/flannel*
+sudo ip link delete cni0      2>/dev/null
+sudo ip link delete flannel.1 2>/dev/null
+
+# 3. hapus HANYA chain milik kubernetes/docker, bukan UFW
+sudo iptables-save | grep -v -E '^:KUBE|^-A KUBE|^:DOCKER|^-A DOCKER|^:CNI|^-A CNI|^:FLANNEL|^-A FLANNEL' | sudo iptables-restore
+for t in filter nat mangle; do
+  sudo iptables -t $t -S | awk '/^-N (KUBE|DOCKER|CNI|FLANNEL)/ {print $2}' \
+    | xargs -r -I{} sudo iptables -t $t -X {}
+done
+
+# 4. reload UFW agar rule SSH+80+443+31883 kembali aktif
+sudo ufw reload
+
+# 5. restart container runtime
+sudo systemctl restart containerd
+```
+
+Kalau terlanjur SSH putus akibat `iptables -F`: masuk lewat **console/VNC** dari panel provider VPS, lalu jalankan `sudo ufw disable` (mengembalikan policy default `ACCEPT`) — SSH segera hidup. Setelah login lagi, jalankan `sudo ufw enable` ulang dan reset bersih dengan langkah di atas.
 
 ---
 

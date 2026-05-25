@@ -11,6 +11,11 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d sapa_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   mongo:
     image: mongo:6
@@ -18,6 +23,11 @@ services:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   mqtt:
     image: eclipse-mosquitto
@@ -26,6 +36,11 @@ services:
       - "9001:9001"
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -t '$$SYS/#' -C 1 -W 3 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   backend:
     build:
@@ -46,12 +61,22 @@ services:
       IOT_OFFLINE_AFTER_SECONDS: "15"
       EDGE_INGEST_KEY: ""
       SECRET_KEY: supersecretkey
+      CORS_ALLOW_ORIGINS: "*"
+      # Set SAPA_RUN_SEED=1 the first time you start the stack to seed the
+      # admin/manager users. Unset (or set to 0) afterwards so password
+      # changes survive container restarts.
+      SAPA_RUN_SEED: "1"
+      SAPA_ADMIN_PASSWORD: ""
+      SAPA_MANAGER_PASSWORD: ""
     ports:
       - "8080:8000"
     depends_on:
-      - db
-      - mongo
-      - mqtt
+      db:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
 
   frontend:
     build:

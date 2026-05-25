@@ -6,7 +6,7 @@ COPY package*.json ./
 RUN npm ci
 
 COPY . .
-RUN npm run build
+RUN chmod -R +x node_modules/.bin && npm run build
 
 FROM nginx:1.27-alpine
 
