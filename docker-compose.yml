@@ -59,7 +59,7 @@ services:
       MQTT_TOPIC_DEVICE_HEARTBEAT: sapa/device/heartbeat
       MQTT_TOPIC_PIR: sapa/pir
       IOT_OFFLINE_AFTER_SECONDS: "15"
-      EDGE_INGEST_KEY: ""
+      EDGE_INGEST_KEY: "dev-edge-ingest-key-for-local-testing"
       SECRET_KEY: supersecretkey
       CORS_ALLOW_ORIGINS: "*"
       # Set SAPA_RUN_SEED=1 the first time you start the stack to seed the

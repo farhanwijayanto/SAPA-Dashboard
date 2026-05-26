@@ -1,0 +1,9 @@
+# Development and testing dependencies for backend (AI Gate Edge Integration)
+# Install via: pip install -r requirements-dev.txt
+# Style: unpinned versions to match backend/requirements.txt convention
+hypothesis
+pytest
+mongomock
+freezegun
+httpx
+python-multipart
