@@ -16,6 +16,8 @@ data:
   MQTT_TOPIC_PIR: "sapa/pir"
   IOT_OFFLINE_AFTER_SECONDS: "15"
   EDGE_STREAM_URL: ""
+  # Restrict CORS to the production hostname(s); comma-separated for multi-origin.
+  CORS_ALLOW_ORIGINS: "https://sapa.farhn.dev"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -78,13 +80,13 @@ spec:
                   optional: true
           readinessProbe:
             httpGet:
-              path: /
+              path: /health
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /
+              path: /health
               port: 8000
             initialDelaySeconds: 30
             periodSeconds: 30

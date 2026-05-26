@@ -40,12 +40,12 @@ Dokumen ini menjelaskan instalasi end-to-end SAPA setelah penambahan fitur:
 
 Topik MQTT yang dipakai:
 
-| Topic | Arah | Contoh payload |
-|-------|------|----------------|
-| `sapa/gate` | Backend → ESP32 | `{ "action": "open", "employee_id": "123456", "ts": "..." }` / `{"action":"close"}` / `{"action":"invalid"}` |
-| `sapa/attendance` | ESP32/Edge → Backend | `{ "employee_id": "123456", "is_valid": true, "direction": "in" }` |
-| `sapa/device/heartbeat` | ESP32/Edge → Backend | `{ "online": true, "source": "esp32" }` (≤15s = ONLINE) |
-| `sapa/pir` | ESP32 → Backend | `{ "motion": true }` -> backend kirim `close` ke gate |
+| topic | arah | sumber pemicu | contoh payload |
+|-------|------|---------------|----------------|
+| `sapa/gate` | publish | POST /api/edge/face-match di AI_Gate_Module | `{"action": "open", "employee_id": "513061"}` |
+| `sapa/attendance` | subscribe | ESP32/Edge melaporkan ke Backend_App | `{ "employee_id": "123456", "is_valid": true, "direction": "in" }` |
+| `sapa/device/heartbeat` | subscribe | ESP32/Edge mengirim heartbeat ke Backend_App | `{ "online": true, "source": "esp32" }` (≤15s = ONLINE) |
+| `sapa/pir` | subscribe | ESP32 mendeteksi pergerakan PIR | `{ "motion": true }` lalu Backend_App kirim `close` ke gate |
 
 ## 2) Prasyarat VPS
 
@@ -122,6 +122,50 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now sapa-backend
 sudo journalctl -u sapa-backend -f
 ```
+
+## Modul AI Gate
+
+Modul `backend/ai_gate.py` adalah berkas Python independen yang berisi satu FastAPI router dengan prefix `/api/edge` plus klien `paho-mqtt` publish-only. Modul ini menjadi jembatan resmi tiga komponen SAPA: Dashboard_Web (Manager mengunggah foto wajah ke `Faces_Storage`), Edge_Laptop (menarik daftar foto referensi via `GET /api/edge/faces`, mengunduh berkas dari `/api/static/faces/{filename}`, lalu melaporkan hasil pencocokan via `POST /api/edge/face-match`), dan ESP32_Gate (menerima `{"action": "open"|"invalid", ...}` dari topic MQTT `sapa/gate`). Modul tidak meng-import `backend.main`, `backend.models`, `backend.schemas`, `backend.database`, atau `backend.mongo_db` — semua state diakses lewat klien `pymongo` dan SQLAlchemy core mandiri yang dikonfigurasi via environment variable.
+
+Alur lifecycle foto wajah berjalan satu arah: Dashboard_Web menyimpan foto ke PVC `Faces_Storage` di backend (`backend/uploads/faces/{employee_id}.jpg`), Edge_Laptop menyinkronkan ke disk lokalnya secara periodik, lalu setiap face match valid dipublish ke topic `sapa/gate` agar ESP32_Gate menggerakkan servo. Modul `ai_gate.py` hanya melakukan `publish()` ke MQTT_Broker; subscribe untuk topic `sapa/attendance`, `sapa/device/heartbeat`, dan `sapa/pir` tetap dipegang oleh `backend/main.py` agar tidak ada dua proses yang berebut menangani pesan inbound.
+
+### Tabel Env Variables AI Gate
+
+| nama env | default | keterangan |
+|----------|---------|------------|
+| `MQTT_BROKER` | `sapa-mosquitto` | Hostname MQTT_Broker yang dipakai modul AI Gate untuk publish ke `sapa/gate`. Pada deployment k3s/kubeadm nilainya adalah service name `sapa-mosquitto.sapa.svc.cluster.local`. |
+| `MQTT_PORT` | `1883` | Port TCP MQTT_Broker. Modul memvalidasi rentang 1024–65535; nilai di luar rentang atau tidak terparse akan otomatis fallback ke `1883` dengan log error ke stdout. |
+| `MQTT_USERNAME` | `backend` | Username Mosquitto untuk publish topic `sapa/gate`. Nilainya disuplai dari secret `sapa-backend-secret` di namespace `sapa`. |
+| `MQTT_PASSWORD` | (kosong) | Password Mosquitto pasangan `MQTT_USERNAME`. Disuplai dari secret `sapa-backend-secret`; jika kosong di production, publish akan ditolak broker dan modul mengembalikan HTTP 503 `mqtt_unavailable`. |
+| `MQTT_TOPIC_GATE` | `sapa/gate` | Topic MQTT tujuan publish Gate_Command. Modul memvalidasi panjang ≤128 karakter dan pola `^[A-Za-z0-9_/+#-]+$`; nilai invalid otomatis fallback ke `sapa/gate` dengan log error ke stdout. |
+| `MONGODB_URI` | `mongodb://localhost:27017` | Connection string MongoDB tempat modul menulis Attendance_Log dan Audit_Log. Pada deployment k3s/kubeadm nilainya adalah `mongodb://sapa-mongo.sapa.svc.cluster.local:27017`. |
+| `MONGODB_DB` | `sapa` | Nama database MongoDB. Modul hanya mengakses koleksi `attendance_logs` (presensi sukses) dan `audit_logs` (peringatan unknown_face dan kegagalan publish MQTT); koleksi lain tidak disentuh. |
+
+### Registrasi router di `backend/main.py`
+
+Modul AI Gate cukup diregistrasikan dengan dua baris di `backend/main.py`:
+
+```python
+from ai_gate import router as ai_gate_router
+```
+
+```python
+app.include_router(ai_gate_router)
+```
+
+Tambahkan baris `from ai_gate import …` di blok import paling atas `backend/main.py`, satu baris bersama import modul lain yang sudah ada (mis. `from auth import …`, `from database import …`). Tambahkan baris `app.include_router(ai_gate_router)` setelah baris `app = FastAPI(...)` (dan setelah `app.add_middleware(CORSMiddleware, ...)` jika sudah ada), sehingga router AI Gate ikut terdaftar saat startup. Bila import `ai_gate` melempar exception, bungkus kedua baris di blok `try/except Exception as exc` dan cetak pesan ke stdout dengan `flush=True` agar Backend_App tetap melayani endpoint lain.
+
+### Verifikasi cepat
+
+Setelah backend di-restart, jalankan:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "X-EDGE-KEY: $EDGE_INGEST_KEY" \
+  https://sapa.example.com/api/edge/faces
+```
+
+Harapan: respons HTTP 200 dengan body JSON `{"faces": [...]}`. Bila respons 503 `edge_auth_misconfigured`, periksa apakah secret `sapa-backend-secret` sudah berisi `EDGE_INGEST_KEY`.
 
 ## 6) Build & Deploy Frontend (Nginx)
 

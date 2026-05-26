@@ -15,10 +15,83 @@ import random
 from . import models, schemas, auth, mongo_db, system_metrics
 from .database import engine, get_db, SessionLocal
 
+# AI Gate Edge Integration router (Requirement 1.1, 1.2, 1.7).
+# The import is wrapped in a try/except so that a transient failure inside
+# ``ai_gate`` (missing optional dep, syntax error during a deploy in progress,
+# etc.) does NOT break the rest of the SAPA backend — startup must keep
+# going even when the AI Gate module fails to load (Requirement 1.7).
+# Sentinels default to ``None`` so the ``include_router`` and ``mount``
+# call sites further down can guard against the missing module.
+try:
+    from .ai_gate import router as ai_gate_router, static_faces_router
+except Exception as exc:  # pragma: no cover - defensive: keep backend booting
+    print(
+        f"[ai_gate] failed to load module=ai_gate exc={type(exc).__name__} msg={exc}",
+        flush=True,
+    )
+    ai_gate_router = None
+    static_faces_router = None
+
 # Create tables
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="SAPA IoT Dashboard API")
+
+# Wire AI Gate routers when the module loaded successfully. The custom
+# ``static_faces_router`` MUST be registered before the fallback
+# ``StaticFiles`` mount below so the regex-validated 400/405 responses
+# take precedence over the generic StaticFiles handler (FastAPI/Starlette
+# routing is order-sensitive).
+if ai_gate_router is not None:
+    app.include_router(ai_gate_router)
+if static_faces_router is not None:
+    app.include_router(static_faces_router)
+
+
+@app.on_event("startup")
+async def _ai_gate_startup() -> None:
+    """Initialise AI Gate side-effects (MQTT publisher, etc.).
+
+    Failures here are logged but never raised — Requirement 1.7 mandates
+    that the rest of the backend keep booting even when AI Gate cannot.
+    """
+
+    if ai_gate_router is None:
+        return
+    try:
+        from . import ai_gate as _ai_gate_mod
+        await _ai_gate_mod.startup()
+    except Exception as exc:
+        print(
+            f"[ai_gate] startup failed: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
+
+@app.on_event("shutdown")
+async def _ai_gate_shutdown() -> None:
+    """Release AI Gate side-effects on FastAPI shutdown."""
+
+    if ai_gate_router is None:
+        return
+    try:
+        from . import ai_gate as _ai_gate_mod
+        await _ai_gate_mod.shutdown()
+    except Exception as exc:
+        print(
+            f"[ai_gate] shutdown failed: {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+
+
+@app.get("/")
+def root():
+    return {"service": "sapa", "ok": True}
+
+
+@app.get("/health")
+def health():
+    return {"ok": True}
 
 _edge_lock = Lock()
 _edge_last_event = {
@@ -106,6 +179,24 @@ _uploads_root = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(_uploads_root, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=_uploads_root), name="uploads")
 
+# AI Gate fallback static mount (Requirements 1.4, 7.1).
+# The custom ``static_faces_router`` registered above performs regex
+# validation on the filename and returns 400 for malformed names. This
+# mount serves as a fallback for methods/paths the router does not
+# match (e.g. HEAD vs GET behaviour handled by StaticFiles, 404 for
+# missing files), and is intentionally registered AFTER the router so
+# the router takes precedence (FastAPI/Starlette dispatch is in
+# registration order). ``check_dir=False`` prevents an ImportError when
+# the faces directory has not been created yet.
+app.mount(
+    "/api/static/faces",
+    StaticFiles(
+        directory=os.path.join(_uploads_root, "faces"),
+        check_dir=False,
+    ),
+    name="ai_gate_faces",
+)
+
 
 def _user_to_dict(user: models.User):
     avatar_url = f"/uploads/avatars/{user.avatar_filename}" if getattr(user, "avatar_filename", None) else None
@@ -128,11 +219,23 @@ def _user_to_dict(user: models.User):
         "permissions": perms,
     }
 
-# Add CORS middleware
+# Add CORS middleware.
+# Origins are taken from CORS_ALLOW_ORIGINS (comma-separated). When unset OR
+# set to "*", we fall back to a permissive configuration WITHOUT credentials
+# (browsers reject `*` + credentials anyway). For production, set:
+#   CORS_ALLOW_ORIGINS=https://sapa.farhn.dev,https://www.sapa.farhn.dev
+_cors_origins_raw = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
+if _cors_origins_raw == "*" or not _cors_origins_raw:
+    _cors_origins: list[str] = ["*"]
+    _cors_allow_credentials = False
+else:
+    _cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+    _cors_allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, replace with specific origins
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_cors_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

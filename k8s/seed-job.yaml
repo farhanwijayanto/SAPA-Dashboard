@@ -1,0 +1,63 @@
+# One-shot seed Job for SAPA backend.
+#
+# Use this Job (instead of running seed in entrypoint.sh) to bootstrap the
+# admin/manager users on a fresh database. After it Completes, delete it.
+#
+# Apply once after the database is healthy:
+#   kubectl apply -f k8s/seed-job.yaml
+#
+# Re-running is safe: seed.py never overwrites existing users.
+#
+# REQUIREMENTS:
+#   - Secret `sapa-backend-secret` must contain DATABASE_URL.
+#   - Add SAPA_ADMIN_PASSWORD and SAPA_MANAGER_PASSWORD keys to the Secret
+#     BEFORE applying this Job. If they are missing, the Job falls back to
+#     the dev defaults `admin123` / `manager123`, which you MUST change
+#     immediately after first login.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sapa-backend-seed
+  namespace: sapa
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      name: sapa-backend-seed
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: seed
+          image: sapa-backend:1.2
+          command: ["python", "-m", "backend.seed"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: sapa-backend-secret
+                  key: DATABASE_URL
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: sapa-backend-secret
+                  key: SECRET_KEY
+            - name: SAPA_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sapa-backend-secret
+                  key: SAPA_ADMIN_PASSWORD
+                  optional: true
+            - name: SAPA_MANAGER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sapa-backend-secret
+                  key: SAPA_MANAGER_PASSWORD
+                  optional: true
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
