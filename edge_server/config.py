@@ -1,4 +1,10 @@
-"""Edge server configuration loaded from environment / .env."""
+"""Edge server configuration loaded from environment / .env.
+
+PENTING soal SAPA_API_BASE:
+  - Untuk konek ke VPS produksi: gunakan  https://sapa.farhn.dev/api
+    (HARUS pakai /api di belakang, karena ingress route /api -> backend)
+  - Untuk test lokal docker-compose:     http://localhost:8080
+"""
 from __future__ import annotations
 
 import os
@@ -6,7 +12,13 @@ from dataclasses import dataclass
 
 try:
     from dotenv import load_dotenv  # type: ignore
-    load_dotenv()
+    # Muat .env yang ada di folder edge_server/ apapun current working dir-nya
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _env_path = os.path.join(_here, ".env")
+    if os.path.exists(_env_path):
+        load_dotenv(_env_path)
+    else:
+        load_dotenv()
 except Exception:
     pass
 
@@ -48,16 +60,21 @@ class Settings:
     cooldown_seconds: int
     sync_every_seconds: int
     frame_push_fps: int
+    # Username manager untuk login otomatis (dapat JWT yang tidak expired
+    # selama service hidup). Dipakai untuk GET /employees/ saat sync foto.
+    sapa_username: str
+    sapa_password: str
 
 
 def load_settings() -> Settings:
     return Settings(
-        api_base=_get("SAPA_API_BASE", "http://localhost:8080").rstrip("/"),
+        # Default ke produksi supaya tidak salah konek ke localhost.
+        api_base=_get("SAPA_API_BASE", "https://sapa.farhn.dev/api").rstrip("/"),
         api_token=_get("SAPA_API_TOKEN"),
         edge_ingest_key=_get("EDGE_INGEST_KEY"),
-        mqtt_broker=_get("MQTT_BROKER", "127.0.0.1"),
-        mqtt_port=_get_int("MQTT_PORT", 1883),
-        mqtt_username=_get("MQTT_USERNAME"),
+        mqtt_broker=_get("MQTT_BROKER", "sapa.farhn.dev"),
+        mqtt_port=_get_int("MQTT_PORT", 31883),
+        mqtt_username=_get("MQTT_USERNAME", "edge"),
         mqtt_password=_get("MQTT_PASSWORD"),
         mqtt_topic_gate=_get("MQTT_TOPIC_GATE", "sapa/gate"),
         mqtt_topic_heartbeat=_get("MQTT_TOPIC_HEARTBEAT", "sapa/device/heartbeat"),
@@ -67,4 +84,6 @@ def load_settings() -> Settings:
         cooldown_seconds=_get_int("COOLDOWN_SECONDS", 5),
         sync_every_seconds=_get_int("SYNC_EVERY_SECONDS", 60),
         frame_push_fps=max(1, _get_int("FRAME_PUSH_FPS", 2)),
+        sapa_username=_get("SAPA_USERNAME", "manager"),
+        sapa_password=_get("SAPA_PASSWORD"),
     )
