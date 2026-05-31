@@ -1,0 +1,63 @@
+name: Deploy to VPS
+
+# Otomatis deploy ke VPS setiap kali ada push ke main yang menyentuh
+# backend/ atau frontend/ atau k8s/. Juga bisa dijalankan manual.
+#
+# CARA KERJA:
+#   1. CI (ci.yml) jalan dulu - lint + build check
+#   2. Workflow ini SSH ke VPS, jalankan scripts/update-vps.sh
+#   3. update-vps.sh: git pull -> rebuild image -> rolling update
+#
+# SETUP SEKALI (lihat docs/integrasi.md atau README workflow ini):
+#   Tambahkan 4 GitHub Secrets di repo Settings -> Secrets and variables -> Actions:
+#     VPS_HOST        = IP external VPS (mis. 34.101.x.x)
+#     VPS_USER        = user SSH (mis. ubuntu / farhan)
+#     VPS_SSH_KEY     = private key SSH (isi seluruh file id_ed25519)
+#     VPS_SSH_PORT    = port SSH (default 22, opsional)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "k8s/**"
+      - "scripts/update-vps.sh"
+  workflow_dispatch: {}   # tombol "Run workflow" manual di tab Actions
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false   # jangan batalkan deploy yang sedang jalan
+
+jobs:
+  deploy:
+    name: SSH deploy ke VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (untuk referensi commit)
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_SSH_PORT || 22 }}
+          command_timeout: 30m
+          script: |
+            set -e
+            cd /opt/sapa
+            git fetch origin main
+            git reset --hard origin/main
+            chmod +x scripts/update-vps.sh
+            bash scripts/update-vps.sh
+
+      - name: Notifikasi hasil
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "Deploy ke VPS BERHASIL untuk commit ${{ github.sha }}"
+          else
+            echo "Deploy ke VPS GAGAL. Cek log step di atas."
+          fi
