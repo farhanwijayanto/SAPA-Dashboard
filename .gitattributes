@@ -1,0 +1,27 @@
+# Normalisasi line endings.
+# Default: biarkan Git auto-handle teks.
+* text=auto
+
+# File shell + entrypoint WAJIB LF (kalau CRLF, gagal jalan di Linux VPS:
+# "bad interpreter: /usr/bin/env bash^M")
+*.sh        text eol=lf
+entrypoint.sh text eol=lf
+*.bash      text eol=lf
+
+# YAML/manifest k8s + dockerfile: LF
+*.yml       text eol=lf
+*.yaml      text eol=lf
+Dockerfile  text eol=lf
+
+# File Windows boleh CRLF
+*.ps1       text eol=crlf
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Binary — jangan diutak-atik
+*.jpg       binary
+*.jpeg      binary
+*.png       binary
+*.npz       binary
+*.pdf       binary
+*.db        binary
