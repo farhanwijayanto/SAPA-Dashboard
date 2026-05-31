@@ -156,22 +156,71 @@ class SapaClient:
         return faces
 
     def fetch_face_image(self, url_path: str) -> Optional[bytes]:
-        """Download foto dari url_path (mis. /uploads/faces/513061.jpg
-        atau /api/static/faces/513061.jpg)."""
+        """Download foto wajah, robust terhadap konfigurasi routing produksi.
+
+        Masalah: url yang dikembalikan backend bisa berupa:
+          - /uploads/faces/513061.jpg          (endpoint legacy /employees/{id}/faces)
+          - /api/static/faces/513061.jpg        (AI Gate)
+          - http://.../...                      (absolut)
+
+        Di produksi, ingress route /api -> backend dan / -> frontend. Jadi
+        /uploads/... yang di-fetch langsung dari origin akan masuk ke frontend
+        (balik index.html), BUKAN file gambar. Untuk itu kita coba beberapa
+        kandidat URL lalu pilih yang benar-benar mengembalikan gambar (cek
+        magic byte JPEG/PNG), bukan HTML.
+        """
         if not url_path:
             return None
-        # url_path bisa absolut (http...) atau relatif (/uploads/... atau /api/static/...)
+
+        origin = self._origin()              # https://sapa.farhn.dev
+        api_base = self.settings.api_base.rstrip("/")  # https://sapa.farhn.dev/api
+
+        # Susun daftar kandidat URL unik (urutan = prioritas).
+        candidates: List[str] = []
         if url_path.startswith("http"):
-            full = url_path
+            candidates.append(url_path)
         else:
-            full = self._origin() + url_path
-        try:
-            r = self._session.get(full, headers=self._edge_headers(), timeout=10)
-            if r.status_code == 200 and r.content:
-                return r.content
-            logger.warning("fetch_face_image %s -> %s", full, r.status_code)
-        except Exception as exc:
-            logger.warning("fetch_face_image failed: %s", exc)
+            p = url_path if url_path.startswith("/") else "/" + url_path
+            # Ambil nama file untuk membentuk path AI Gate alternatif.
+            filename = p.rsplit("/", 1)[-1]
+            # 1) Lewat /api (route ke backend kalau ingress meneruskan apa adanya)
+            candidates.append(api_base + p)
+            # 2) Langsung dari origin (kalau /uploads di-serve langsung backend)
+            candidates.append(origin + p)
+            # 3) AI Gate static via /api (route ke backend)
+            candidates.append(api_base + "/static/faces/" + filename)
+            # 4) AI Gate static dari origin
+            candidates.append(origin + "/api/static/faces/" + filename)
+            # 5) uploads via /api
+            candidates.append(api_base + "/uploads/faces/" + filename)
+
+        # Dedup sambil pertahankan urutan
+        seen = set()
+        uniq = []
+        for c in candidates:
+            if c not in seen:
+                seen.add(c)
+                uniq.append(c)
+
+        for full in uniq:
+            try:
+                r = self._session.get(full, headers=self._edge_headers(), timeout=10)
+                if r.status_code != 200 or not r.content:
+                    continue
+                blob = r.content
+                # Validasi: harus JPEG (FF D8 FF) atau PNG (89 50 4E 47)
+                is_jpeg = blob[:3] == b"\xff\xd8\xff"
+                is_png = blob[:8] == b"\x89PNG\r\n\x1a\n"
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                if is_jpeg or is_png or ctype.startswith("image/"):
+                    return blob
+                # Kalau dapat HTML (index.html dari frontend), lanjut kandidat lain
+                logger.debug("fetch_face_image %s -> bukan gambar (ctype=%s), coba kandidat lain", full, ctype)
+            except Exception as exc:
+                logger.debug("fetch_face_image kandidat %s gagal: %s", full, exc)
+                continue
+
+        logger.warning("fetch_face_image gagal untuk semua kandidat dari url_path=%s", url_path)
         return None
 
     # ------------------------------------------------------------------
