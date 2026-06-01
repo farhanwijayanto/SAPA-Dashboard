@@ -27,6 +27,7 @@ import os
 import sys
 import threading
 import time
+import webbrowser
 from typing import Dict, Optional
 
 try:
@@ -44,6 +45,7 @@ except Exception:  # pragma: no cover
     _HAS_CV2 = False
 
 from .config import load_settings
+from .liveness import LivenessDetector
 from .overlay import (
     FaceAnnotation,
     draw_face_box,
@@ -199,6 +201,27 @@ def _has_display() -> bool:
     return True
 
 
+def _open_edge_page(url: str) -> None:
+    """Buka halaman /edge di browser default (sekali saat start).
+
+    Dijalankan di thread terpisah + delay kecil supaya tidak mengganggu
+    startup kamera. Aman di Windows/macOS/Linux desktop; di server headless
+    webbrowser.open() akan no-op tanpa error.
+    """
+    def _worker():
+        time.sleep(2.0)
+        try:
+            opened = webbrowser.open(url, new=2)
+            if opened:
+                logger.info("Browser dibuka ke halaman edge: %s", url)
+            else:
+                logger.info("Tidak bisa buka browser otomatis. Buka manual: %s", url)
+        except Exception as exc:
+            logger.info("Auto-open browser gagal (%s). Buka manual: %s", exc, url)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -218,9 +241,28 @@ def main() -> int:
     recognizer = FaceRecognizer(threshold=settings.recognition_threshold)
     recognizer.load_cache()
 
+    # Liveness anti-spoof (deteksi wajah asli vs foto/layar HP)
+    liveness = None
+    if settings.liveness_enabled:
+        liveness = LivenessDetector(
+            threshold=settings.liveness_threshold,
+            use_blink=True,
+            require_blink=settings.liveness_require_blink,
+        )
+        logger.info(
+            "Liveness AKTIF (threshold=%.2f require_blink=%s)",
+            settings.liveness_threshold, settings.liveness_require_blink,
+        )
+    else:
+        logger.info("Liveness NONAKTIF (LIVENESS_ENABLED=false)")
+
     api = SapaClient(settings)
     state = SharedState()
     state.synced_count = recognizer.known_count
+
+    # Auto-buka halaman /edge di browser (pengenalan wajah versi browser)
+    if settings.open_browser:
+        _open_edge_page(settings.edge_page_url)
 
     mqtt_client = _start_mqtt(settings, state)
 
@@ -327,12 +369,50 @@ def main() -> int:
 
             if best_valid is not None:
                 m = best_valid[0]
-                if m.employee_id == last_employee and (now - last_match_at) < settings.cooldown_seconds:
+                # --- LIVENESS CHECK: pastikan wajah ASLI, bukan foto/layar HP ---
+                live_ok = True
+                live_reason = ""
+                if liveness is not None:
+                    lres = liveness.analyze(frame_bgr, m.bbox)
+                    live_ok = lres.is_live
+                    live_reason = lres.reason
+                    # Gambar status liveness di overlay (kuning kalau spoof)
+                    if not live_ok:
+                        try:
+                            top, right, bottom, left = m.bbox
+                            cv2.putText(
+                                frame_bgr, "SPOOF?", (left, bottom + 22),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 220), 2, cv2.LINE_AA,
+                            )
+                        except Exception:
+                            pass
+
+                if not live_ok:
+                    # Wajah dikenali TAPI terindikasi spoof -> JANGAN buka gate
+                    if (now - last_match_at) >= settings.cooldown_seconds:
+                        last_match_at = now
+                        last_employee = None
+                        logger.warning(
+                            "SPOOF terdeteksi untuk %s -> gate TIDAK dibuka (%s)",
+                            m.employee_id, live_reason,
+                        )
+                        api.report_face_match(
+                            is_valid=False, employee_id=m.employee_id,
+                            confidence=m.confidence, message="liveness_failed",
+                        )
+                        api.push_edge_event(
+                            is_valid=False, employee_id=m.employee_id,
+                            message="Wajah terdeteksi palsu (foto/layar)",
+                        )
+                        with state.lock:
+                            state.last_match_id = "spoof"
+                elif m.employee_id == last_employee and (now - last_match_at) < settings.cooldown_seconds:
                     pass
                 else:
                     last_match_at = now
                     last_employee = m.employee_id
-                    logger.info("MATCH: %s confidence=%.2f", m.employee_id, m.confidence)
+                    logger.info("MATCH: %s confidence=%.2f live=%s",
+                                m.employee_id, m.confidence, live_reason or "off")
                     success, resp = api.report_face_match(
                         is_valid=True, employee_id=m.employee_id,
                         confidence=m.confidence, direction="in",
@@ -358,6 +438,10 @@ def main() -> int:
                     api.push_edge_event(is_valid=False, employee_id=None, message="Wajah tidak dikenali")
                     with state.lock:
                         state.last_match_id = "unknown"
+            else:
+                # Tidak ada wajah -> reset state blink liveness
+                if liveness is not None:
+                    liveness.reset_blink()
 
             # FPS
             fps_n += 1

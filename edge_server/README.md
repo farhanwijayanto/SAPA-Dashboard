@@ -123,3 +123,44 @@ Manager tambah karyawan baru (nama + tgl lahir + posisi + foto) di dashboard:
 ## Jalan permanen sebagai Windows service
 
 Lihat `docs/SAPA-Kubeadm-Deployment-ID.md` §8.A.6 (NSSM / Task Scheduler).
+
+## Liveness Detection (anti-spoof)
+
+Modul `liveness.py` mendeteksi apakah wajah di kamera ASLI atau SPOOF
+(foto di HP, layar laptop, cetakan foto). Aktif secara default.
+
+**4 cue passive yang digabung jadi skor 0..1:**
+
+| Cue | Deteksi | Bobot |
+|-----|---------|-------|
+| Moiré / FFT | Pola frekuensi-tinggi dari piksel layar HP/laptop | 50% |
+| Texture / Laplacian | Ketajaman tidak natural (rebanding layar / blur) | 30% |
+| Color / specular | Highlight + saturasi tidak natural dari layar | 20% |
+| Blink (EAR) | Kedipan mata (foto diam tidak berkedip) | bonus +0.30 |
+
+Kalau wajah dikenali TAPI terindikasi spoof → **gate TIDAK dibuka**, dan
+event dicatat sebagai `liveness_failed` (kotak + label "SPOOF?" muncul).
+
+**Config di `.env`:**
+```env
+LIVENESS_ENABLED=true           # false untuk matikan
+LIVENESS_THRESHOLD=0.5          # 0..1, naikkan untuk lebih ketat
+LIVENESS_REQUIRE_BLINK=false    # true = WAJIB kedip (paling ketat, anti foto diam)
+```
+
+> Passive liveness tidak 100% anti-spoof (tidak ada yang 100%). Ini lapisan
+> tambahan murah. Untuk keamanan tinggi, kombinasi dengan kamera depth/IR.
+> Tuning threshold dilakukan saat instalasi di laptop dengan webcam + foto HP nyata.
+
+## Auto-open browser ke /edge
+
+Saat `python -m edge_server.main` dijalankan, browser default otomatis
+membuka `https://sapa.farhn.dev/edge` (pengenalan wajah versi browser).
+
+**Config di `.env`:**
+```env
+OPEN_BROWSER=true               # false untuk matikan
+EDGE_PAGE_URL=                  # kosong = auto dari SAPA_API_BASE
+```
+
+Di server headless (tanpa display), auto-open jadi no-op tanpa error.

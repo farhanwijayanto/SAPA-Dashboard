@@ -64,12 +64,35 @@ class Settings:
     # selama service hidup). Dipakai untuk GET /employees/ saat sync foto.
     sapa_username: str
     sapa_password: str
+    # Liveness anti-spoof (deteksi wajah asli vs foto/layar HP)
+    liveness_enabled: bool
+    liveness_threshold: float
+    liveness_require_blink: bool
+    # Auto-buka browser ke halaman /edge saat service start
+    open_browser: bool
+    edge_page_url: str
+
+
+def _get_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, str(default)).strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def _derive_edge_page_url(api_base: str) -> str:
+    """Dari SAPA_API_BASE (https://sapa.farhn.dev/api) -> URL halaman /edge."""
+    base = api_base.rstrip("/")
+    if base.endswith("/api"):
+        origin = base[:-4]
+    else:
+        origin = base
+    return origin + "/edge"
 
 
 def load_settings() -> Settings:
+    api_base = _get("SAPA_API_BASE", "https://sapa.farhn.dev/api").rstrip("/")
     return Settings(
         # Default ke produksi supaya tidak salah konek ke localhost.
-        api_base=_get("SAPA_API_BASE", "https://sapa.farhn.dev/api").rstrip("/"),
+        api_base=api_base,
         api_token=_get("SAPA_API_TOKEN"),
         edge_ingest_key=_get("EDGE_INGEST_KEY"),
         mqtt_broker=_get("MQTT_BROKER", "sapa.farhn.dev"),
@@ -86,4 +109,9 @@ def load_settings() -> Settings:
         frame_push_fps=max(1, _get_int("FRAME_PUSH_FPS", 2)),
         sapa_username=_get("SAPA_USERNAME", "manager"),
         sapa_password=_get("SAPA_PASSWORD"),
+        liveness_enabled=_get_bool("LIVENESS_ENABLED", True),
+        liveness_threshold=_get_float("LIVENESS_THRESHOLD", 0.5),
+        liveness_require_blink=_get_bool("LIVENESS_REQUIRE_BLINK", False),
+        open_browser=_get_bool("OPEN_BROWSER", True),
+        edge_page_url=_get("EDGE_PAGE_URL", _derive_edge_page_url(api_base)),
     )
